@@ -322,6 +322,94 @@ describe("bounded changeset preparation and quotas", () => {
 });
 
 describe("authenticated garbage collection", () => {
+  test.each([false, true])("collects expired legacy V2 without history bindings (missing archive actions: %s)", async (missingArchiveActions) => {
+    const changesetStore = store();
+    const value = candidate();
+    const prepared = await changesetStore.preparePublication(value);
+    await changesetStore.publishPair(prepared);
+    const legacy = { ...value } as Record<string, unknown>;
+    delete legacy.historyFiles;
+    if (missingArchiveActions) delete legacy.archiveActions;
+    const key = await readFile(join(cache(), "changeset-hmac.key"));
+    const mac = createHmac("sha256", key).update(canonicalJson(legacy), "utf8").digest("hex");
+    await writeFile(prepared.changesetPath, JSON.stringify(legacy));
+    await writeFile(prepared.signaturePath, JSON.stringify({
+      version: 1, algorithm: "hmac-sha256", changesetId: value.changesetId, mac
+    }));
+
+    await expect(changesetStore.loadAuthenticated(project().repository, value.changesetId)).rejects.toThrow(/malformed/i);
+    await expect(changesetStore.collectGarbage(project().repository)).rejects.toThrow(/malformed/i);
+    await expect(readFile(prepared.changesetPath, "utf8")).resolves.toBe(JSON.stringify(legacy));
+    clock = value.expiresAt;
+    await expect(changesetStore.loadAuthenticated(project().repository, value.changesetId)).rejects.toThrow(/malformed|expired/i);
+    await expect(changesetStore.collectGarbage(project().repository)).resolves.toBeUndefined();
+    expect(await cacheEntries()).toEqual([]);
+  });
+
+  test("recovers an oversized legacy cache before publishing a fresh preview", async () => {
+    const changesetStore = store();
+    const fresh = await changesetStore.preparePublication(candidate());
+    const key = await readFile(join(cache(), "changeset-hmac.key"));
+    await writeYoungOrphans(1_020);
+    const retained = await cacheEntries();
+    // Older releases could accumulate more than the current 1,024-entry inventory.
+    for (let index = 0; index < 3; index += 1) {
+      const value = { ...candidate(), version: 1 } as Record<string, unknown>;
+      value.createdAt = clock - changesetLifetimeMs;
+      value.expiresAt = clock;
+      delete value.diffDigest;
+      delete value.archiveActions;
+      delete value.semanticDecisionIds;
+      delete value.historyFiles;
+      const mac = createHmac("sha256", key).update(canonicalJson(value), "utf8").digest("hex");
+      await writeFile(join(cache(), "changesets", `${value.changesetId}.json`), JSON.stringify(value), { mode: 0o600 });
+      await writeFile(join(cache(), "changesets", `${value.changesetId}.sig.json`), JSON.stringify({
+        version: 1, algorithm: "hmac-sha256", changesetId: value.changesetId, mac
+      }), { mode: 0o600 });
+    }
+
+    await expect(changesetStore.publishPair(fresh)).resolves.toBeUndefined();
+    expect(await cacheEntries()).toEqual([...retained, basename(fresh.changesetPath), basename(fresh.signaturePath)].sort());
+    await expect(changesetStore.loadAuthenticated(project().repository, fresh.changesetId))
+      .resolves.toHaveProperty("changeset.changesetId", fresh.changesetId);
+  }, 120_000);
+
+  test("preserves unauthenticated pairs during oversized-cache recovery", async () => {
+    const changesetStore = store();
+    const value = candidate();
+    const prepared = await changesetStore.preparePublication(value);
+    await changesetStore.publishPair(prepared);
+    const tamperedBytes = JSON.stringify({ ...value, root: project().nonGitDirectory });
+    await writeFile(prepared.changesetPath, tamperedBytes);
+    await writeYoungOrphans(1_023);
+    clock = value.expiresAt;
+
+    await expect(changesetStore.collectGarbage(project().repository)).rejects.toThrow(/authentication|tamper/i);
+    await expect(readFile(prepared.changesetPath, "utf8")).resolves.toBe(tamperedBytes);
+    await expect(readFile(prepared.signaturePath, "utf8")).resolves.toContain("hmac-sha256");
+  }, 120_000);
+
+  test("does not admit new previews when an oversized cache still contains young orphans", async () => {
+    const changesetStore = store();
+    const fresh = await changesetStore.preparePublication(candidate());
+    await writeYoungOrphans(1_025);
+    const before = await cacheEntries();
+
+    await expect(changesetStore.collectGarbage(project().repository)).resolves.toBeUndefined();
+    await expect(changesetStore.publishPair(fresh)).rejects.toThrow(/headroom/i);
+    expect(await cacheEntries()).toEqual(before);
+  }, 120_000);
+
+  test("bounds recovery enumeration before deleting from an excessive cache", async () => {
+    const changesetStore = store();
+    await changesetStore.preparePublication(candidate());
+    await writeYoungOrphans(4_097);
+    const before = await cacheEntries();
+
+    await expect(changesetStore.collectGarbage(project().repository)).rejects.toThrow(/bounded recovery entries/i);
+    expect(await cacheEntries()).toEqual(before);
+  }, 120_000);
+
   test("reconciles a durable post-unlink removal intent before inventory", async () => {
     const layout = await prepareSecureCache({ cacheDirectory: cache() }, project().repository);
     const target = join(layout.locks, "post-unlink-recovery-target");
