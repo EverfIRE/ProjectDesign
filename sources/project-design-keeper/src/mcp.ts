@@ -388,7 +388,7 @@ function registerApplyTool(server: McpServer, service: McpKeeperService): void {
 
 export function createMcpServer(service: McpKeeperService): McpServer {
   const server = new McpServer(
-    { name: "project-design-keeper", version: "1.0.1" },
+    { name: "project-design-keeper", version: "1.0.2" },
     { instructions: serverInstructions }
   );
 

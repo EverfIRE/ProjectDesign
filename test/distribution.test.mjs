@@ -597,7 +597,7 @@ test("release and complete source are separate trees", async () => {
 
   const releasePackage = await readJSON(`plugins/${pluginName}/package.json`);
   assert.equal(releasePackage.name, pluginName);
-  assert.equal(releasePackage.version, "1.0.1");
+  assert.equal(releasePackage.version, "1.0.2");
   assert.equal(Object.hasOwn(releasePackage, "scripts"), false);
   assert.equal(Object.hasOwn(releasePackage, "devDependencies"), false);
   const releaseSkill = await readFile(path.join(repoRoot, "plugins", pluginName, "skills", "distill-project-design", "SKILL.md"), "utf8");
@@ -632,7 +632,7 @@ test("published plugin metadata uses stable repository URLs", async () => {
   ]) {
     const manifest = await readJSON(manifestPath);
     assert.equal(manifest.name, pluginName);
-    assert.equal(manifest.version, "1.0.1");
+    assert.equal(manifest.version, "1.0.2");
     assert.equal(manifest.interface.displayName, "ProjectDesignKeeper");
     assert.equal(manifest.author.url, publisherURL);
     assert.equal(manifest.homepage, repositoryURL);

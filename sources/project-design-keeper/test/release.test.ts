@@ -19,7 +19,7 @@ describe("release metadata and read-only acceptance contract", () => {
     const manifest = await json(resolve(pluginRoot, ".codex-plugin/plugin.json"));
     expect(manifest).toMatchObject({
       name: "project-design-keeper",
-      version: "1.0.1",
+      version: "1.0.2",
       author: { name: "EverfIRE" },
       skills: "./skills/",
       mcpServers: "./.mcp.json",
@@ -45,7 +45,7 @@ describe("release metadata and read-only acceptance contract", () => {
   test("publishes matching package metadata and executable quality gates", async () => {
     const packageManifest = await json(resolve(pluginRoot, "package.json"));
     expect(packageManifest).toMatchObject({
-      version: "1.0.1",
+      version: "1.0.2",
       scripts: {
         "test:coverage": expect.any(String),
         "test:perf": expect.any(String),

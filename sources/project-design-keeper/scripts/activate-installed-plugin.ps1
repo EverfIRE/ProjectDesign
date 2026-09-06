@@ -1595,9 +1595,9 @@ function Assert-PackageIdentity {
         $plugin = Convert-BoundedPackageJson $Evidence.Files['.codex-plugin/plugin.json'] "$Label plugin manifest"
         $package = Convert-BoundedPackageJson $Evidence.Files['package.json'] "$Label package manifest"
         $configuration = Convert-BoundedPackageJson $Evidence.Files['.mcp.json'] "$Label MCP manifest"
-        if ($plugin.name -ne 'project-design-keeper' -or $plugin.version -ne '1.0.1' -or
+        if ($plugin.name -ne 'project-design-keeper' -or $plugin.version -ne '1.0.2' -or
             $plugin.skills -ne './skills/' -or $plugin.mcpServers -ne './.mcp.json' -or
-            $package.name -ne 'project-design-keeper' -or $package.version -ne '1.0.1') {
+            $package.name -ne 'project-design-keeper' -or $package.version -ne '1.0.2') {
             throw ([KeeperActivationPackageShapeException]::new(
                 "$Label has the wrong project-design-keeper package identity"))
         }

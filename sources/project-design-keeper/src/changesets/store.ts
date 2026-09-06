@@ -33,6 +33,10 @@ const claimInitializationEntryPattern = new RegExp(`^\\.claim-${uuidV4Pattern}\\
 const releasedClaimEntryPattern = /^(\.publish-.+\.json)\.release-[a-f0-9]{32}$/u;
 // Two final halves per global live-pair slot, plus equal bounded headroom for orphans/artifacts.
 const maximumInventoryEntries = keeperLimits.changesets.maxPairsGlobal * 4;
+// Legacy releases could exceed the admission ceiling. Allow bounded recovery to
+// authenticate and collect that backlog before applying the unchanged quota.
+// This is a scan ceiling only; it does not admit additional retained entries.
+const maximumRecoveryEntries = maximumInventoryEntries * 4;
 // During the second half, the first final plus claim, temporary, and new final may coexist.
 const pairPublicationEntryHeadroom = 4;
 
@@ -502,8 +506,8 @@ export function createChangesetStore(options: ChangesetStoreOptions = {}): Chang
     const directory = await opendir(cache.changesets);
     try {
       for await (const entry of directory) {
-        if (directoryEntries.length >= maximumInventoryEntries) {
-          throw new Error(`Changeset cache contains more than ${maximumInventoryEntries} bounded entries`);
+        if (directoryEntries.length >= maximumRecoveryEntries) {
+          throw new Error(`Changeset cache contains more than ${maximumRecoveryEntries} bounded recovery entries`);
         }
         directoryEntries.push({ name: entry.name, isFile: entry.isFile() });
       }
@@ -521,7 +525,7 @@ export function createChangesetStore(options: ChangesetStoreOptions = {}): Chang
     const pairs = new Map<string, PairMetadata>();
     let directoryEntries: Array<{ name: string; isFile: boolean }>;
     let previousClaimCount: number | undefined;
-    let reconciliationBudget = maximumInventoryEntries;
+    let reconciliationBudget = maximumRecoveryEntries;
     for (;;) {
       directoryEntries = await readBoundedDirectoryEntries(cache);
       const claims = directoryEntries
@@ -618,7 +622,20 @@ export function createChangesetStore(options: ChangesetStoreOptions = {}): Chang
           }
           continue;
         }
-        const loaded = parseAuthenticatedVersionTwo(cache, id, pair.changeset, pair.signature, authenticated, {
+        let recoveryContents = authenticated;
+        const legacy = authenticated.raw as Record<string, unknown> | null;
+        if (legacy && legacy.version === 2 && !Object.hasOwn(legacy, "historyFiles") &&
+            typeof legacy.expiresAt === "number" && now() >= legacy.expiresAt) {
+          // Early V2 writers predate history bindings (and sometimes archive actions).
+          // Normalize only authenticated, expired data for GC; never for load/apply.
+          recoveryContents = { ...authenticated, raw: {
+            ...(!Object.hasOwn(legacy, "archiveActions")
+              ? { archiveActions: { archivedRecordIds: [], tombstonedRecordIds: [] } } : {}),
+            ...legacy,
+            historyFiles: {}
+          } };
+        }
+        const loaded = parseAuthenticatedVersionTwo(cache, id, pair.changeset, pair.signature, recoveryContents, {
           allowExpired: true,
           now: now()
         });

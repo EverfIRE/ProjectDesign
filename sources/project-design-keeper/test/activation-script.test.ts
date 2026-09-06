@@ -121,7 +121,7 @@ async function makeLayout(): Promise<ActivationLayout> {
     verifiedTemporaryParent("keeper-activation-project-parent-")
   ]);
   const packageRoot = join(packageParent, `package-${randomUUID()}`);
-  const installRoot = join(installParent, "1.0.1");
+  const installRoot = join(installParent, "1.0.2");
   const projectRoot = join(projectParent, `project-${randomUUID()}`);
   await Promise.all([
     mkdir(packageRoot, { recursive: false }),
@@ -1558,7 +1558,7 @@ describe("recoverable installed plugin activation", () => {
     const base = await makeLayout();
     await writePackage(base.packageRoot);
     const nestedParent = join(base.installParent, `nested-${randomUUID()}`);
-    const nestedInstall = join(nestedParent, "1.0.1");
+    const nestedInstall = join(nestedParent, "1.0.2");
     await mkdir(nestedParent);
     await mkdir(nestedInstall);
     await writePackage(nestedInstall, { previous: true });

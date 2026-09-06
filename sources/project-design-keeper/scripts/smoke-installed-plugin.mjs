@@ -700,11 +700,11 @@ async function validateInstalledIdentity(root) {
   const pkg = readJson(installedFiles.get("package.json"), "Installed package manifest");
   const configuration = readJson(installedFiles.get(".mcp.json"), "Installed MCP manifest");
   assert.equal(plugin.name, "project-design-keeper", "Wrong installed package identity in plugin manifest");
-  assert.equal(plugin.version, "1.0.1", "Wrong installed package identity in plugin manifest");
+  assert.equal(plugin.version, "1.0.2", "Wrong installed package identity in plugin manifest");
   assert.equal(plugin.skills, "./skills/", "Wrong installed package skill root");
   assert.equal(plugin.mcpServers, "./.mcp.json", "Wrong installed package MCP manifest");
   assert.equal(pkg.name, "project-design-keeper", "Wrong installed package identity in package manifest");
-  assert.equal(pkg.version, "1.0.1", "Wrong installed package identity in package manifest");
+  assert.equal(pkg.version, "1.0.2", "Wrong installed package identity in package manifest");
   const parameters = configuration.mcpServers?.["project-design-keeper"];
   assert.deepEqual(parameters, { command: "node", args: ["dist/index.js"], cwd: "." }, "Wrong installed package MCP command");
   return { parameters, installedFiles };
@@ -761,7 +761,7 @@ const transport = new StdioClientTransport({
   env: childEnvironment,
   stderr: "pipe"
 });
-const client = new Client({ name: "keeper-installed-smoke", version: "1.0.1" });
+const client = new Client({ name: "keeper-installed-smoke", version: "1.0.2" });
 let operationError;
 let stderr = "";
 let stderrBytes = 0;
