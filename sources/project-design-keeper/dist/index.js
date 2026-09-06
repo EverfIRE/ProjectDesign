@@ -33458,7 +33458,6 @@ var publicationTemporaryEntryPattern = new RegExp(`^\\.${uuidV4Pattern}\\.tmp$`,
 var claimInitializationEntryPattern = new RegExp(`^\\.claim-${uuidV4Pattern}\\.tmp$`, "u");
 var releasedClaimEntryPattern = /^(\.publish-.+\.json)\.release-[a-f0-9]{32}$/u;
 var maximumInventoryEntries = keeperLimits.changesets.maxPairsGlobal * 4;
-var maximumRecoveryEntries = maximumInventoryEntries * 4;
 var pairPublicationEntryHeadroom = 4;
 function parseChangesetEntryName(name) {
   const signature2 = name.endsWith(".sig.json");
@@ -33744,8 +33743,8 @@ function createChangesetStore(options = {}) {
     const directory = await opendir5(cache.changesets);
     try {
       for await (const entry of directory) {
-        if (directoryEntries.length >= maximumRecoveryEntries) {
-          throw new Error(`Changeset cache contains more than ${maximumRecoveryEntries} bounded recovery entries`);
+        if (directoryEntries.length >= maximumInventoryEntries) {
+          throw new Error(`Changeset cache contains more than ${maximumInventoryEntries} bounded entries`);
         }
         directoryEntries.push({ name: entry.name, isFile: entry.isFile() });
       }
@@ -33759,7 +33758,7 @@ function createChangesetStore(options = {}) {
     const pairs = /* @__PURE__ */ new Map();
     let directoryEntries;
     let previousClaimCount;
-    let reconciliationBudget = maximumRecoveryEntries;
+    let reconciliationBudget = maximumInventoryEntries;
     for (; ; ) {
       directoryEntries = await readBoundedDirectoryEntries(cache);
       const claims = directoryEntries.map((entry) => ({ entry, targetName: publicationClaimTargetName(entry.name) })).filter((candidate) => candidate.targetName !== void 0).sort((left, right) => left.entry.name.localeCompare(right.entry.name, "en-US"));
@@ -33832,15 +33831,15 @@ function createChangesetStore(options = {}) {
           io.beforeBoundedReadFinalValidation
         );
         if (authenticated.raw && typeof authenticated.raw === "object" && !Array.isArray(authenticated.raw) && authenticated.raw.version === 1) {
-          const legacy2 = expiredPersistedChangesetV1Schema.safeParse(authenticated.raw);
-          if (!legacy2.success) {
-            const detail = legacy2.error.issues.map((issue2) => `${issue2.path.join(".")}: ${issue2.message}`).join("; ");
+          const legacy = expiredPersistedChangesetV1Schema.safeParse(authenticated.raw);
+          if (!legacy.success) {
+            const detail = legacy.error.issues.map((issue2) => `${issue2.path.join(".")}: ${issue2.message}`).join("; ");
             throw new Error(`Persisted version-one changeset is malformed: ${detail}`);
           }
-          if (legacy2.data.changesetId !== id) {
+          if (legacy.data.changesetId !== id) {
             throw new Error("Persisted version-one changeset ID does not match its filename");
           }
-          if (now() >= legacy2.data.expiresAt) {
+          if (now() >= legacy.data.expiresAt) {
             await removeExactPair(cache, pair.changeset.identity, pair.signature.identity, io.removeExactFile);
           } else {
             inventory.retainedBytes += pair.changeset.size + pair.signature.size;
@@ -33848,16 +33847,7 @@ function createChangesetStore(options = {}) {
           }
           continue;
         }
-        let recoveryContents = authenticated;
-        const legacy = authenticated.raw;
-        if (legacy && legacy.version === 2 && !Object.hasOwn(legacy, "historyFiles") && typeof legacy.expiresAt === "number" && now() >= legacy.expiresAt) {
-          recoveryContents = { ...authenticated, raw: {
-            ...!Object.hasOwn(legacy, "archiveActions") ? { archiveActions: { archivedRecordIds: [], tombstonedRecordIds: [] } } : {},
-            ...legacy,
-            historyFiles: {}
-          } };
-        }
-        const loaded = parseAuthenticatedVersionTwo(cache, id, pair.changeset, pair.signature, recoveryContents, {
+        const loaded = parseAuthenticatedVersionTwo(cache, id, pair.changeset, pair.signature, authenticated, {
           allowExpired: true,
           now: now()
         });
