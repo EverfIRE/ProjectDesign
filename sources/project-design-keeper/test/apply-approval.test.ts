@@ -192,12 +192,70 @@ describe("host-mediated apply approval", () => {
 
     expect(elicitations).toHaveLength(1);
     expect(elicitations[0].message.length).toBeLessThan(16 * 1024);
-    expect(elicitations[0].message).toContain(".agents/skills/project-design-context/approval.md");
+    expect(elicitations[0].message).toContain("Files: 1 create, 0 update, 0 delete");
+    expect(elicitations[0].message).toContain("preview_update");
     expect(elicitations[0].message).not.toContain("PRIVATE-FILE-BODY-MUST-NOT-BE-ELICITED");
     expect(elicitations[0].message).not.toContain(cacheDirectory());
     expect(JSON.stringify(elicitations[0].requestedSchema)).not.toContain("PRIVATE-FILE-BODY-MUST-NOT-BE-ELICITED");
     expect(JSON.stringify(elicitations[0].requestedSchema)).not.toContain(cacheDirectory());
     await expect(readFile(targetFile(), "utf8")).resolves.toContain("PRIVATE-FILE-BODY-MUST-NOT-BE-ELICITED");
+  });
+
+  test("keeps a 39-file approval compact with a labelled confirmation field and applies the full changeset", async () => {
+    const api = createProjectDesignKeeper({ cacheDirectory: cacheDirectory() });
+    const changes = Array.from({ length: 39 }, (_, index) => ({
+      path: `.agents/skills/project-design-context/popup-${index}.md`,
+      managedBlock: { recordId: `popup.record.${index}`, content: `# Popup regression ${index}\n` }
+    }));
+    const pending = await api.previewUpdate({ root: project().repository, changes });
+    const binding = await api.inspectChangesetForApproval({
+      root: project().repository, changesetId: pending.changesetId
+    });
+    const elicitations: Array<{ message: string; requestedSchema: unknown }> = [];
+
+    await withApplyClient(api, {
+      form: true,
+      onElicit: async (request) => {
+        const message = String(request.params.message);
+        elicitations.push({ message, requestedSchema: request.params.requestedSchema });
+        return { action: "accept", content: { decision: "approve", confirmation: suffixFrom(message) } };
+      }
+    }, async (client) => {
+      const result = await client.callTool({
+        name: "apply_update",
+        arguments: { root: project().repository, changesetId: pending.changesetId }
+      });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({ applied: true });
+    });
+
+    expect(elicitations).toHaveLength(1);
+    const { message, requestedSchema } = elicitations[0];
+    expect(Buffer.byteLength(message, "utf8")).toBeLessThanOrEqual(1536);
+    expect(message.split("\n").length).toBeLessThanOrEqual(8);
+    expect(suffixFrom(message.split("\n")[0])).toBe(binding.diffDigest.slice(-8));
+    expect(message).toContain(binding.changesetId);
+    expect(message).toContain(binding.diffDigest);
+    expect(message).toContain("Files: 39 create, 0 update, 0 delete");
+    expect(message).toContain("preview_update");
+    expect(message).not.toContain(changes[0].path);
+    expect(requestedSchema).toMatchObject({
+      properties: {
+        decision: { title: expect.any(String), description: expect.any(String), enum: ["approve"] },
+        confirmation: {
+          type: "string", title: expect.stringContaining(binding.diffDigest.slice(-8)),
+          description: expect.any(String), minLength: 8, maxLength: 8
+        }
+      },
+      required: ["decision", "confirmation"]
+    });
+    expect((requestedSchema as { properties: { confirmation: object } }).properties.confirmation)
+      .not.toHaveProperty("default");
+    expect(binding.paths).toHaveLength(39);
+    for (const change of changes) {
+      await expect(readFile(join(project().repository, change.path), "utf8"))
+        .resolves.toContain(change.managedBlock.content);
+    }
   });
 
   test.each(["decline", "cancel"] as const)("does not mutate when elicitation returns %s", async (action) => {

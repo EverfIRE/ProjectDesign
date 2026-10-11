@@ -30807,22 +30807,19 @@ function approvalMessage(binding) {
     /[\u007f-\u009f\p{Cf}\p{Zl}\p{Zp}]/gu,
     (character) => `\\u${character.codePointAt(0).toString(16).padStart(4, "0")}`
   );
-  const summaryJson = escapeFormatControls(JSON.stringify({
-    root: binding.root,
-    changesetId: binding.changesetId,
-    diffDigest: binding.diffDigest,
-    expiresAt: new Date(binding.expiresAt).toISOString(),
-    summary: binding.summary,
-    paths: binding.paths,
-    archiveActions: binding.archiveActions,
-    semanticDecisionIds: binding.semanticDecisionIds
-  }, null, 2));
+  const rootCharacters = Array.from(escapeFormatControls(JSON.stringify(binding.root)));
+  const rootLabel = rootCharacters.length > 120 ? `${rootCharacters.slice(0, 76).join("")}\u2026${rootCharacters.slice(-40).join("")} (shortened)` : rootCharacters.join("");
   const message = [
-    "Approve this authenticated Project Design Keeper changeset?",
-    summaryJson,
-    `Select approve and type the final eight hexadecimal digest characters: ${binding.diffDigest.slice(-8)}`
+    `Select approve and type the final eight hexadecimal digest characters: ${binding.diffDigest.slice(-8)}`,
+    "Project Design Keeper: review the full file list and diff in preview_update before approving.",
+    `Project: ${rootLabel}`,
+    `Files: ${binding.summary.create} create, ${binding.summary.update} update, ${binding.summary.delete} delete`,
+    `Records: ${binding.archiveActions.archivedRecordIds.length} archive, ${binding.archiveActions.tombstonedRecordIds.length} tombstone; semantic confirmations: ${binding.semanticDecisionIds.length}`,
+    `Changeset: ${binding.changesetId}`,
+    `Digest: ${binding.diffDigest}`,
+    `Expires: ${new Date(binding.expiresAt).toISOString()}`
   ].join("\n");
-  assertStringWithin("Approval summary", message, 1024 * 1024);
+  assertStringWithin("Approval message", message, 1536);
   return message;
 }
 function approvalRequestIdentity(extra) {
@@ -30868,8 +30865,19 @@ function registerApplyTool(server, service) {
         requestedSchema: {
           type: "object",
           properties: {
-            decision: { type: "string", enum: ["approve"] },
-            confirmation: { type: "string", minLength: 8, maxLength: 8 }
+            decision: {
+              type: "string",
+              enum: ["approve"],
+              title: "Approve changeset",
+              description: "Select approve only after reviewing the full preview_update diff."
+            },
+            confirmation: {
+              type: "string",
+              minLength: 8,
+              maxLength: 8,
+              title: `Confirmation code: ${binding.diffDigest.slice(-8)}`,
+              description: "Type the eight hexadecimal characters shown above to confirm this changeset."
+            }
           },
           required: ["decision", "confirmation"]
         }
@@ -30893,7 +30901,7 @@ function registerApplyTool(server, service) {
 }
 function createMcpServer(service) {
   const server = new McpServer(
-    { name: "project-design-keeper", version: "1.0.2" },
+    { name: "project-design-keeper", version: "1.0.3" },
     { instructions: serverInstructions }
   );
   registerTool(server, "scan_scope", "Scan a repository scope and return a bounded summary or cursor-paged files/evidence for an immutable snapshot.", scanInput, readOnlyAnnotations, scopedOperation(service.scanScope));

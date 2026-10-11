@@ -66,6 +66,10 @@ If form elicitation is unsupported, `apply_update` returns a bounded error expla
 
 The elicitation summary calls out newly confirmed required/preferred records and redundancy merge decisions separately from filesystem writes. This does not make candidate fields self-authenticating: the exact candidate diff is authenticated first, displayed by identity and digest, and confirmed through the host before it can reach disk. Existing preview output continues to show the complete diff and conflicts before this independent write confirmation.
 
+### 1.0.3 amendment: compact host form
+
+The authenticated approval binding in step 3 still includes all affected paths and record IDs. The host form displays operation and record counts instead of those lists, with at most eight logical lines and 1,536 UTF-8 bytes. It retains the full changeset ID, digest, and expiry; a long project root is visibly shortened for display only. Full details must be reviewed in `preview_update` before opening the form. The digest confirmation code appears first and in the explicitly labelled input field. This presentation change does not alter the full binding, one-use authorization, or exact typed confirmation checks.
+
 ## Input and Durable Cache Budgets
 
 All MCP handlers measure the parsed argument object before invoking business logic. The SDK necessarily parses JSON first, so the plugin cannot prevent the host/SDK parse allocation; it can and will prevent expensive validation, diff construction, repository reads, and persistence for oversized arguments.

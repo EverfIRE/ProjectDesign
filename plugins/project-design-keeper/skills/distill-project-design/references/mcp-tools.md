@@ -26,6 +26,8 @@ Call `scan_scope` with `view: "summary"` first. Use bounded pages and never reus
 
 A changeset expires exactly 30 minutes after creation. Present its diff and conflicts, then obtain explicit confirmation. Invoke `apply_update` by `changesetId` only after confirmation. Apply rejects expired, missing, tampered, or stale changesets and target/source/manifest drift. Create a new preview after any rejection; do not retry an old changeset as though it were current.
 
+The host approval form shows a compact summary of file and record counts, the changeset ID, digest, and expiry. Review the full file list and diff from `preview_update` before opening it; long lists are not repeated in the form. Select `approve` and type the eight-character code shown at the top and in the confirmation field's title. A long project path is explicitly shortened for display only. Authorization remains bound to the complete changeset.
+
 Apply writes atomically and retains bounded recovery snapshots, but recovery does not replace confirmation or concurrency checks.
 
 ## Degraded mode

@@ -295,10 +295,10 @@ describe("Project Design Keeper MCP protocol", () => {
     }
   });
 
-  test("renders archive actions and escapes approval-message format controls", async () => {
+  test("summarizes archive actions and escapes approval-message format controls", async () => {
     const service = stubService({
       inspectChangesetForApproval: vi.fn(async () => ({
-        root: "C:/project\u200b\u2028root",
+        root: "C:/project\u200b\u2028\u202e\u2060root",
         changesetId: "123e4567-e89b-12d3-a456-426614174000",
         diffDigest: `sha256:${"a".repeat(64)}`,
         expiresAt: Date.now() + 60_000,
@@ -324,13 +324,56 @@ describe("Project Design Keeper MCP protocol", () => {
       });
       expect(result.isError).not.toBe(true);
       const message = String(elicitation.mock.calls[0][0].message);
-      expect(message).toContain("record.archived");
-      expect(message).toContain("record.tombstoned");
+      expect(message).toContain("Records: 1 archive, 1 tombstone; semantic confirmations: 0");
+      expect(message).not.toContain("record.archived");
+      expect(message).not.toContain("record.tombstoned");
       expect(message).toContain("\\u200b");
       expect(message).toContain("\\u2028");
       expect(message).toContain("\\u202e");
       expect(message).toContain("\\u2060");
       expect(message).not.toMatch(/[\p{Cf}\p{Zl}\p{Zp}]/u);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+
+  test("bounds approval display for long Unicode roots and large record lists without shortening the authorization", async () => {
+    const binding: ChangesetApprovalBinding = {
+      root: `C:/${"项目😀".repeat(1000)}/repository`,
+      changesetId: "123e4567-e89b-12d3-a456-426614174000",
+      diffDigest: `sha256:${"a".repeat(64)}`,
+      expiresAt: Date.now() + 60_000,
+      paths: Array.from({ length: 200 }, (_, index) => `docs/project-design/file-${index}.md`),
+      summary: { create: 120, update: 60, delete: 20 },
+      archiveActions: {
+        archivedRecordIds: Array.from({ length: 500 }, (_, index) => `archived.${index}`),
+        tombstonedRecordIds: Array.from({ length: 500 }, (_, index) => `tombstoned.${index}`)
+      },
+      semanticDecisionIds: Array.from({ length: 500 }, (_, index) => `confirmed.${index}`)
+    };
+    const service = stubService({ inspectChangesetForApproval: vi.fn(async () => binding) });
+    const server = createMcpServer(service);
+    const elicitation = vi.spyOn(server.server, "elicitInput").mockResolvedValue({
+      action: "accept", content: { decision: "approve", confirmation: "aaaaaaaa" }
+    });
+    const { client } = await connectServer(server, true);
+    try {
+      const result = await client.callTool({
+        name: "apply_update",
+        arguments: { root: "C:/project", changesetId: binding.changesetId }
+      });
+      expect(result.isError).not.toBe(true);
+      const message = String(elicitation.mock.calls[0][0].message);
+      expect(Buffer.byteLength(message, "utf8")).toBeLessThanOrEqual(1536);
+      expect(message.split("\n").length).toBeLessThanOrEqual(8);
+      expect(message).toContain("(shortened)");
+      expect(message).toContain("Files: 120 create, 60 update, 20 delete");
+      expect(message).toContain("Records: 500 archive, 500 tombstone; semantic confirmations: 500");
+      expect(service.issueApplyAuthorization).toHaveBeenCalledWith(binding, expect.any(Object));
+      expect(binding.paths).toHaveLength(200);
+      expect(binding.archiveActions.archivedRecordIds).toHaveLength(500);
+      expect(binding.semanticDecisionIds).toHaveLength(500);
     } finally {
       await client.close();
       await server.close();
