@@ -3,6 +3,7 @@ import { lstat, open, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { TextDecoder } from "node:util";
 import { safeRepositoryPath, windowsRepositoryPathKey, type ServiceOptions } from "../types/schema.js";
+import { managedReadLimits } from "../settings/policy.js";
 import {
   ByteBudget,
   CounterBudget,
@@ -227,8 +228,8 @@ export async function queryHistory(input: JsonObject, options: ServiceOptions = 
   const root = await realpath(resolve(input.root));
   const limits = resolveKeeperLimits(options.limits);
   const historyBudget: HistoryReadBudget = {
-    maxFileBytes: limits.preview.maxFileBytes,
-    bytes: new ByteBudget("History aggregate bytes", limits.preview.maxAggregateBytes),
+    maxFileBytes: Math.min(managedReadLimits.maxFileBytes, options.limits?.preview?.maxFileBytes ?? Infinity),
+    bytes: new ByteBudget("History aggregate bytes", Math.min(managedReadLimits.maxAggregateBytes, options.limits?.preview?.maxAggregateBytes ?? Infinity)),
     files: new CounterBudget("History files", 4)
   };
   const manifestBytes = await safeRead(

@@ -556,10 +556,12 @@ describe("host-mediated apply approval", () => {
 
     expect(Object.keys(summary).sort()).toEqual([
       "archiveActions",
+      "authorizationSource",
       "changesetId",
       "diffDigest",
       "expiresAt",
       "paths",
+      "policy",
       "root",
       "semanticDecisionIds",
       "summary"
@@ -656,7 +658,7 @@ describe("host-mediated apply approval", () => {
       const semanticDecisionIds = [`record.${"a".repeat(1024 * 1024)}`];
       changeset.semanticDecisionIds = semanticDecisionIds;
       changeset.diffDigest = `sha256:${createHash("sha256")
-        .update(canonicalJson({ changes: changeset.changes, semanticDecisionIds }), "utf8")
+        .update(canonicalJson({ changes: changeset.changes, semanticDecisionIds, policy: changeset.policy, diff: changeset.diff }), "utf8")
         .digest("hex")}`;
     });
 

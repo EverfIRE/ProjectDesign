@@ -35,6 +35,7 @@ import { loadAndValidateHistoryOverlay } from "./knowledge/history-integrity.js"
 import { decodeCanonicalJsonLines } from "./knowledge/jsonl.js";
 import {
   createApplyApprovalAuthority,
+  type ApplyApprovalAuthority,
   type ApplyAuthorization,
   type ChangesetApprovalBinding
 } from "./security/approval.js";
@@ -67,6 +68,8 @@ import {
   type ScopeInput,
   type ServiceOptions
 } from "./types/schema.js";
+import { freezeRuntimePolicy, managedReadLimits, sameRuntimePolicy } from "./settings/policy.js";
+import { decodeStoredText, encodeStoredText } from "./security/text-storage.js";
 
 const managedRoots = ["docs/project-design", ".agents/skills/project-design-context"] as const;
 const managedClose = "<!-- /project-design-keeper:managed -->";
@@ -268,27 +271,36 @@ interface ParsedManagedDocument {
 }
 
 function parseManagedDocument(contents: string): ParsedManagedDocument {
-  const expression = /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->([\s\S]*?)<!-- \/project-design-keeper:managed -->/gu;
-  const derivedExpression = /<!-- project-design-keeper:derived document-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->([\s\S]*?)<!-- \/project-design-keeper:derived -->/gu;
+  const expression = /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->/gu;
+  const derivedExpression = /<!-- project-design-keeper:derived document-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->/gu;
   const blockIds = new Set<string>();
   const derivedIds = new Set<string>();
   const spans: Array<[number, number]> = [];
   let match: RegExpExecArray | null;
   while ((match = expression.exec(contents)) !== null) {
+    const bodyStart = expression.lastIndex;
+    const bodyEnd = contents.indexOf(managedClose, bodyStart);
+    if (bodyEnd < 0) break;
+    expression.lastIndex = bodyEnd + managedClose.length;
     if (blockIds.has(match[1])) return { valid: false, fullyOwned: false, blockIds, derivedIds, conflict: `Duplicate managed block: ${match[1]}` };
-    if (sha256(Buffer.from(match[3], "utf8")) !== match[2]) {
+    if (sha256(Buffer.from(contents.slice(bodyStart, bodyEnd), "utf8")) !== match[2]) {
       return { valid: false, fullyOwned: false, blockIds, derivedIds, conflict: `Managed block ${match[1]} content hash does not match its marker` };
     }
     blockIds.add(match[1]);
-    spans.push([match.index, match.index + match[0].length]);
+    spans.push([match.index, expression.lastIndex]);
   }
   while ((match = derivedExpression.exec(contents)) !== null) {
+    const derivedClose = "<!-- /project-design-keeper:derived -->";
+    const bodyStart = derivedExpression.lastIndex;
+    const bodyEnd = contents.indexOf(derivedClose, bodyStart);
+    if (bodyEnd < 0) break;
+    derivedExpression.lastIndex = bodyEnd + derivedClose.length;
     if (derivedIds.has(match[1])) return { valid: false, fullyOwned: false, blockIds, derivedIds, conflict: `Duplicate derived block: ${match[1]}` };
-    if (sha256(Buffer.from(match[3], "utf8")) !== match[2]) {
+    if (sha256(Buffer.from(contents.slice(bodyStart, bodyEnd), "utf8")) !== match[2]) {
       return { valid: false, fullyOwned: false, blockIds, derivedIds, conflict: `Derived block ${match[1]} content hash does not match its marker` };
     }
     derivedIds.add(match[1]);
-    spans.push([match.index, match.index + match[0].length]);
+    spans.push([match.index, derivedExpression.lastIndex]);
   }
   spans.sort((left, right) => left[0] - right[0]);
   let surrounding = "";
@@ -539,7 +551,7 @@ function mergeManagedBlock(
 ): { content?: string; conflict?: string } {
   const recordId = escapedRegularExpression(block.recordId);
   const expression = new RegExp(
-    `<!-- project-design-keeper:managed record-id="${recordId}" content-hash="(sha256:[a-f0-9]{64})" -->([\\s\\S]*?)${escapedRegularExpression(managedClose)}`,
+    `<!-- project-design-keeper:managed record-id="${recordId}" content-hash="(sha256:[a-f0-9]{64})" -->`,
     "u"
   );
   const parsed = parseManagedDocument(original);
@@ -547,14 +559,18 @@ function mergeManagedBlock(
   const match = expression.exec(original);
   const opener = `<!-- project-design-keeper:managed record-id="${block.recordId}"`;
   if (match) {
-    const actual = sha256(Buffer.from(match[2], "utf8"));
+    const bodyStart = match.index + match[0].length;
+    const bodyEnd = original.indexOf(managedClose, bodyStart);
+    if (bodyEnd < 0) return { conflict: `Managed block ${block.recordId} has no closing marker` };
+    const blockEnd = bodyEnd + managedClose.length;
+    const actual = sha256(Buffer.from(original.slice(bodyStart, bodyEnd), "utf8"));
     if (actual !== match[1]) return { conflict: `Managed block ${block.recordId} content hash does not match its marker` };
     if (expectedHash && expectedHash !== actual) return { conflict: `Managed block ${block.recordId} differs from the expected content hash` };
     if ("delete" in block) {
-      return { content: `${original.slice(0, match.index)}${original.slice(match.index + match[0].length)}` };
+      return { content: `${original.slice(0, match.index)}${original.slice(blockEnd)}` };
     }
     const replacement = `${opener} content-hash="${sha256(Buffer.from(block.content, "utf8"))}" -->${block.content}${managedClose}`;
-    return { content: `${original.slice(0, match.index)}${replacement}${original.slice(match.index + match[0].length)}` };
+    return { content: `${original.slice(0, match.index)}${replacement}${original.slice(blockEnd)}` };
   }
   if ("delete" in block) return { conflict: `Managed block ${block.recordId} does not exist` };
   if (expectedHash) return { conflict: `Managed block ${block.recordId} does not exist for the expected content hash` };
@@ -828,6 +844,9 @@ async function deriveArchiveActions(
 }
 
 function approvalBinding(changeset: PersistedChangeset): ChangesetApprovalBinding {
+  if (changeset.version !== 3 || !changeset.policy || changeset.diff === undefined) {
+    throw new Error("Changeset uses a legacy preview format; regenerate the preview update");
+  }
   if (changeset.sourcePaths && (!changeset.validatedPack || !changeset.validationDependencyDigest)) {
     throw new Error("Candidate changeset predates validation dependency binding; preview the update again");
   }
@@ -838,6 +857,8 @@ function approvalBinding(changeset: PersistedChangeset): ChangesetApprovalBindin
     else summary.create += 1;
   }
   return {
+    policy: { ...changeset.policy },
+    authorizationSource: changeset.policy.easyMode ? "easy-policy" : "human-form",
     root: changeset.root,
     changesetId: changeset.changesetId,
     diffDigest: changeset.diffDigest,
@@ -853,7 +874,11 @@ function approvalBinding(changeset: PersistedChangeset): ChangesetApprovalBindin
 }
 
 async function persistJson(cache: SecureCacheLayout, path: string, value: unknown): Promise<void> {
-  await publishExclusiveFile(cache, path, `${JSON.stringify(value, null, 2)}\n`);
+  const serialized = `${JSON.stringify(encodeStoredText(value), null, 2)}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > recoverySnapshotMaxBytes) {
+    throw new Error("Recovery snapshot exceeds its bounded serialized byte limit before publication");
+  }
+  await publishExclusiveFile(cache, path, serialized);
 }
 
 interface ChangesetRequest {
@@ -934,6 +959,7 @@ interface RecoverySnapshotRecord {
   changesetId: string;
   createdAt: number;
   files: Record<string, RecoveryFileRecord>;
+  authorization?: { source: "easy-policy" | "human-form"; policy: import("./settings/policy.js").RuntimePolicy; diffDigest: string };
 }
 
 interface CapturedRecoverySnapshot {
@@ -961,8 +987,10 @@ interface CapturedRecoveryFile {
 
 const canonicalUuidPattern = "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const recoverySnapshotNamePattern = new RegExp(`^(0|[1-9][0-9]*)-(${canonicalUuidPattern})-(${canonicalUuidPattern})\\.json$`, "u");
-const recoverySnapshotMaxBytes = keeperLimits.preview.maxAggregateBytes * 3 +
-  keeperLimits.preview.maxChanges * 2048;
+const recoverySnapshotMaxBytes = 512 * 1024 * 1024;
+// A restorable snapshot keeps both UTF-8 text and base64. Three times the old
+// file-read aggregate covers both representations plus bounded record metadata.
+const recoverySnapshotExpandedMaxBytes = managedReadLimits.maxAggregateBytes * 3;
 const recoverySnapshotMaxObservedFiles = keeperLimits.changesets.maxPairsPerProject;
 
 function exactObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
@@ -1008,11 +1036,24 @@ function parseRecoverySnapshotRecord(
   canonicalRoot: string,
   activeChangeset?: PersistedChangeset
 ): RecoverySnapshotRecord {
-  if (!exactObject(value, ["version", "root", "changesetId", "createdAt", "files"]) ||
+  const hasAuthorization = Boolean(value && typeof value === "object" && Object.hasOwn(value, "authorization"));
+  if (!exactObject(value, ["version", "root", "changesetId", "createdAt", "files", ...(hasAuthorization ? ["authorization"] : [])]) ||
       value.version !== 1 || value.root !== canonicalRoot || typeof value.changesetId !== "string" ||
       !Number.isSafeInteger(value.createdAt) || Number(value.createdAt) < 0 ||
       !value.files || typeof value.files !== "object" || Array.isArray(value.files)) {
     throw new Error("Recovery snapshot has an unexpected schema");
+  }
+  let authorization: RecoverySnapshotRecord["authorization"];
+  if (hasAuthorization) {
+    const audit = value.authorization;
+    if (!exactObject(audit, ["source", "policy", "diffDigest"]) ||
+        !["easy-policy", "human-form"].includes(String(audit.source)) ||
+        typeof audit.diffDigest !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(audit.diffDigest)) throw new Error("Recovery authorization audit is invalid");
+    const policy = freezeRuntimePolicy(audit.policy as import("./settings/policy.js").RuntimePolicy);
+    if ((audit.source === "easy-policy") !== policy.easyMode) throw new Error("Recovery authorization source does not match its policy");
+    authorization = { source: audit.source as "easy-policy" | "human-form", policy, diffDigest: audit.diffDigest };
+    if (activeChangeset?.changesetId === value.changesetId &&
+        (!activeChangeset.policy || !sameRuntimePolicy(policy, activeChangeset.policy) || audit.diffDigest !== activeChangeset.diffDigest)) throw new Error("Recovery authorization audit does not match the authenticated changeset");
   }
   const match = recoverySnapshotNamePattern.exec(name);
   if (!match || Number(match[1]) !== value.createdAt || match[2] !== value.changesetId) {
@@ -1043,6 +1084,7 @@ function parseRecoverySnapshotRecord(
     root: value.root,
     changesetId: value.changesetId,
     createdAt: value.createdAt,
+    ...(authorization ? { authorization } : {}),
     files
   };
 }
@@ -1072,7 +1114,8 @@ async function readRecoverySnapshot(
   path: string,
   name: string,
   canonicalRoot: string,
-  activeChangeset?: PersistedChangeset
+  activeChangeset?: PersistedChangeset,
+  expandedInventoryBudget?: ByteBudget
 ): Promise<CapturedRecoverySnapshot> {
   try {
     await validateCacheFile(cache, path, false);
@@ -1102,7 +1145,9 @@ async function readRecoverySnapshot(
     try {
       const serialized = contents.toString("utf8");
       if (!Buffer.from(serialized, "utf8").equals(contents)) throw new Error("non-canonical UTF-8");
-      parsed = JSON.parse(serialized);
+      const wire: unknown = JSON.parse(serialized);
+      if (!(wire && typeof wire === "object" && Object.hasOwn(wire, "textStorage"))) expandedInventoryBudget?.consume(contents.byteLength);
+      parsed = decodeStoredText(wire, (bytes) => expandedInventoryBudget?.consume(bytes));
     } catch {
       throw new Error("Recovery snapshot JSON is invalid");
     }
@@ -1261,8 +1306,23 @@ async function storeRecoverySnapshot(
     throw new Error("Recovery snapshot directory exceeds its bounded entry limit");
   }
   await validateCacheFiles(cache, names.map((name) => join(directory, name)));
-  let snapshots = await Promise.all(names.map((name) =>
-    readRecoverySnapshot(cache, join(directory, name), name, canonicalRoot, changeset)));
+  let snapshots: CapturedRecoverySnapshot[] = [];
+  const recoveryInventoryBytes = new ByteBudget("Recovery snapshot inventory", 1024 * 1024 * 1024);
+  const activeSnapshotBytes = new ByteBudget("Expanded active recovery snapshots", recoverySnapshotExpandedMaxBytes);
+  const inventoryDeadline = new DeadlineBudget("Recovery snapshot inventory", 30_000);
+  for (const name of names) {
+    inventoryDeadline.check();
+    const snapshotPath = join(directory, name);
+    recoveryInventoryBytes.consume(Number((await lstat(snapshotPath)).size));
+    const isActive = recoverySnapshotNamePattern.exec(name)?.[2] === changeset.changesetId;
+    const snapshot = await readRecoverySnapshot(cache, snapshotPath, name, canonicalRoot, changeset,
+      isActive ? activeSnapshotBytes : new ByteBudget("Expanded recovery snapshot", recoverySnapshotExpandedMaxBytes));
+    // Inactive contents were fully verified; retention cleanup only needs their
+    // exact identity/hash. Do not retain ten expanded large-file copies in RAM.
+    if (!isActive) snapshot.value = { ...snapshot.value, files: {} };
+    snapshots.push(snapshot);
+    inventoryDeadline.check();
+  }
   let active = snapshots.filter(({ changesetId }) => changesetId === changeset.changesetId)
     .sort((left, right) => right.createdAt - left.createdAt || right.name.localeCompare(left.name, "en-US"));
   if (active.some((snapshot) => !isDeepStrictEqual(snapshot.value.files, files))) {
@@ -1287,6 +1347,11 @@ async function storeRecoverySnapshot(
       root: canonicalRoot,
       changesetId: changeset.changesetId,
       createdAt: now,
+      ...(changeset.policy ? { authorization: {
+        source: changeset.policy.easyMode ? "easy-policy" as const : "human-form" as const,
+        policy: { ...changeset.policy },
+        diffDigest: changeset.diffDigest
+      } } : {}),
       files
     } satisfies RecoverySnapshotRecord);
     const published = await readRecoverySnapshot(cache, path, name, canonicalRoot, changeset);
@@ -1417,7 +1482,7 @@ async function readExactProjectFile(
   relativeLabel: string,
   budget?: ProjectFileReadBudget
 ): Promise<Buffer> {
-  const maxFileBytes = budget?.maxFileBytes ?? keeperLimits.preview.maxFileBytes;
+  const maxFileBytes = budget?.maxFileBytes ?? managedReadLimits.maxFileBytes;
   if (size < 0n || size > BigInt(maxFileBytes)) {
     throw new Error(`${budget?.label ?? "Output file"} exceeds the per-file limit of ${maxFileBytes} bytes: ${relativeLabel}`);
   }
@@ -2213,26 +2278,73 @@ async function atomicApply(
   }
 }
 
-export function createTransactionService(options: ServiceOptions = {}) {
+export function createTransactionService(options: ServiceOptions = {}, sharedApprovalAuthority?: ApplyApprovalAuthority) {
   const cacheDirectory = resolveCacheDirectory(
     options,
     options.environment ?? process.env,
     options.homeDirectory ?? homedir()
   );
   const now = options.now ?? (() => Date.now());
-  const limits = resolveKeeperLimits(options.limits);
-  const approvalAuthority = createApplyApprovalAuthority(now);
+  const policy = freezeRuntimePolicy(options.runtimePolicy);
+  const limits = resolveKeeperLimits(options.limits, policy);
+  const approvalAuthority = sharedApprovalAuthority ?? createApplyApprovalAuthority(now);
+  const readFileBytes = Math.min(managedReadLimits.maxFileBytes, options.limits?.preview?.maxFileBytes ?? Infinity);
+  const readAggregateBytes = Math.min(managedReadLimits.maxAggregateBytes, options.limits?.preview?.maxAggregateBytes ?? Infinity);
   const changesetStore = createChangesetStore({
     cacheDirectory,
     environment: options.environment,
     homeDirectory: options.homeDirectory,
     now,
-    limits: options.limits
+    limits: options.limits,
+    runtimePolicy: policy
   });
 
   async function loadAuthenticatedChangeset(request: ChangesetRequest): Promise<LoadedAuthenticatedChangeset> {
     await validateManagedRoots(request.root);
-    return changesetStore.loadAuthenticated(request.root, request.changesetId);
+    const loaded = await changesetStore.loadAuthenticated(request.root, request.changesetId);
+    approvalBinding(loaded.changeset);
+    if (!sameRuntimePolicy(loaded.changeset.policy!, policy)) {
+      throw new Error("Settings revision changed since preview; regenerate the preview update");
+    }
+    assertWriteBudget(loaded.changeset.changes);
+    return loaded;
+  }
+
+  function assertWriteBudget(changes: PersistedChange[]): void {
+    if (changes.length > limits.preview.maxChanges) throw new Error(`Preview changes exceeds the limit of ${limits.preview.maxChanges} items`);
+    const aggregate = new ByteBudget("Preview aggregate bytes", limits.preview.maxAggregateBytes);
+    for (const change of changes) {
+      const bytes = change.delete ? 0 : Buffer.byteLength(change.content ?? "", "utf8");
+      aggregate.consume(bytes);
+      if (bytes > limits.preview.maxFileBytes) throw new Error(`Preview file ${change.path} exceeds the per-file limit of ${limits.preview.maxFileBytes} bytes`);
+    }
+  }
+
+  function previewPage(changeset: PersistedChangeset, cursor?: unknown) {
+    const bytes = Buffer.from(changeset.diff!, "utf8");
+    let start = 0;
+    if (cursor !== undefined) {
+      if (typeof cursor !== "string" || cursor.length > 256) throw new Error("Invalid preview cursor");
+      const prefix = `${changeset.changesetId}:${changeset.diffDigest}:`;
+      if (!cursor.startsWith(prefix) || !/^(0|[1-9][0-9]*)$/u.test(cursor.slice(prefix.length))) throw new Error("Invalid preview cursor binding");
+      start = Number(cursor.slice(prefix.length));
+      if (!Number.isSafeInteger(start) || start >= bytes.length || (start > 0 && (bytes[start]! & 0xc0) === 0x80)) throw new Error("Invalid preview cursor offset");
+    }
+    // Worst-case JSON string escaping uses six bytes per byte. Keep every page
+    // below the shared one-MiB envelope even for control-character-heavy diffs.
+    const pageBytes = Math.max(4, Math.min(limits.preview.maxDiffBytes, 128 * 1024));
+    let end = Math.min(bytes.length, start + pageBytes);
+    while (end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+    const complete = end === bytes.length;
+    return { diff: bytes.subarray(start, end).toString("utf8"), nextCursor: complete ? null : `${changeset.changesetId}:${changeset.diffDigest}:${end}`, complete, totalBytes: bytes.length, diffDigest: changeset.diffDigest };
+  }
+
+  async function readPreview(input: Record<string, unknown>) {
+    const request = await resolveChangesetRequest(input);
+    const { changeset } = await loadAuthenticatedChangeset(request);
+    const page = { changesetId: changeset.changesetId, policy: { ...policy }, ...previewPage(changeset, input.cursor) };
+    assertToolResultBudget(page);
+    return page;
   }
 
   async function inspectChangesetForApproval(input: Record<string, unknown>): Promise<ChangesetApprovalBinding> {
@@ -2253,13 +2365,14 @@ export function createTransactionService(options: ServiceOptions = {}) {
   async function previewUpdate(input: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (typeof input.root !== "string") throw new Error("A repository root is required");
     const changes = requestedChanges(input.changes);
+    if (changes.length > limits.preview.maxChanges) throw new Error(`Preview changes exceeds the limit of ${limits.preview.maxChanges} items`);
     let candidatePack = typeof input.pack === "object" && input.pack !== null && !Array.isArray(input.pack)
       ? input.pack as Record<string, unknown>
       : undefined;
     const previewReads = projectFileReadBudget(
       "Preview file reads",
-      limits.preview.maxFileBytes,
-      limits.preview.maxAggregateBytes,
+      readFileBytes,
+      readAggregateBytes,
       limits.scan.maxFiles,
       limits.scan.deadlineMs
     );
@@ -2272,6 +2385,7 @@ export function createTransactionService(options: ServiceOptions = {}) {
     };
     if (candidatePack) {
       assertPackValidationInputBounds(candidatePack, {
+        runtimePolicy: policy,
         limits: options.limits,
         resourceBudget: candidateValidationResources
       });
@@ -2279,6 +2393,7 @@ export function createTransactionService(options: ServiceOptions = {}) {
       if (serializedCandidatePack === undefined) throw new Error("Candidate pack must be serializable JSON");
       candidatePack = JSON.parse(serializedCandidatePack) as Record<string, unknown>;
     }
+    assertSerializedWithin("Preview arguments", input, limits.mcpArgumentBytes);
     const decisions = redundancyDecisions(input.redundancyDecisions);
     const analysisId = typeof input.analysisId === "string" ? input.analysisId : undefined;
     if ((decisions && !analysisId) || (analysisId && !decisions)) {
@@ -2418,10 +2533,11 @@ export function createTransactionService(options: ServiceOptions = {}) {
         applicable: false,
         conflicts,
         ...(candidatePack ? { validation: conflictValidation(conflicts) } : {}),
-        changes: persisted.map(({ previousHash: _previousHash, managedBlocks: _managedBlocks, ...change }) => change)
+        changes: responseChanges(persisted)
       };
     }
 
+    assertWriteBudget(persisted);
     const capturedManifest = [...originals.entries()]
       .find(([path]) => windowsRepositoryPathKey(path) === manifestKey);
     const exactCurrentManifestBytes = capturedManifest
@@ -2479,6 +2595,7 @@ export function createTransactionService(options: ServiceOptions = {}) {
         [...overlay.entries()].map(([path, value]) => [windowsRepositoryPathKey(path), value] as const)
       );
       validation = await validatePack({ root: scope.root, pack: candidatePack }, {
+        runtimePolicy: policy,
         overlay,
         preaccountedOverlay: new Set(historyDependencySnapshot.keys()),
         limits: options.limits,
@@ -2573,7 +2690,7 @@ export function createTransactionService(options: ServiceOptions = {}) {
           applicable: false,
           conflicts: ["Candidate pack validation failed"],
           validation,
-          changes: persisted.map(({ previousHash: _previousHash, managedBlocks: _managedBlocks, ...change }) => change)
+          changes: responseChanges(persisted)
         };
       }
       if (!confirmedValidationDependencyDigest) {
@@ -2595,13 +2712,16 @@ export function createTransactionService(options: ServiceOptions = {}) {
       ? Object.keys(candidateSourceRevision as Record<string, unknown>).sort()
       : undefined;
     const confirmedSemanticDecisionIds = semanticDecisionIds(currentPackForChangeset, candidatePack, decisions);
+    const diff = unifiedDiff(persisted, originals);
     const changeset: PersistedChangeset = {
-      version: 2,
+      version: 3,
+      policy,
+      diff,
       changesetId,
       root: scope.root,
       createdAt,
       expiresAt: createdAt + changesetLifetimeMs,
-      diffDigest: persistedDiffDigest(persisted, confirmedSemanticDecisionIds),
+      diffDigest: persistedDiffDigest(persisted, confirmedSemanticDecisionIds, policy, diff),
       archiveActions: confirmedArchiveActions,
       semanticDecisionIds: confirmedSemanticDecisionIds,
       historyFiles: confirmedHistoryFiles,
@@ -2616,12 +2736,6 @@ export function createTransactionService(options: ServiceOptions = {}) {
         ? { validatedPack: candidatePack, validationDependencyDigest: confirmedValidationDependencyDigest }
         : {})
     };
-    const diff = unifiedDiff(persisted, originals);
-    const diffBytes = Buffer.byteLength(diff, "utf8");
-    if (diffBytes > limits.preview.maxDiffBytes) {
-      const kibibytes = limits.preview.maxDiffBytes / 1024;
-      throw new Error(`Generated diff exceeds the limit of ${kibibytes} KiB (${limits.preview.maxDiffBytes} bytes)`);
-    }
     const previewResult = {
       applicable: true,
       conflicts: [],
@@ -2629,10 +2743,15 @@ export function createTransactionService(options: ServiceOptions = {}) {
       changesetId,
       createdAt: new Date(createdAt).toISOString(),
       expiresAt: new Date(changeset.expiresAt).toISOString(),
-      diffDigest: changeset.diffDigest,
       summary: summaryFor(persisted),
-      diff,
-      changes: persisted.map(({ previousHash: _previousHash, managedBlocks: _managedBlocks, ...change }) => change)
+      statistics: {
+        files: persisted.length,
+        writeBytes: persisted.reduce((total, change) => total + (change.delete ? 0 : Buffer.byteLength(change.content!, "utf8")), 0),
+        ...approvalBinding(changeset).summary
+      },
+      policy: { ...policy },
+      ...previewPage(changeset),
+      changes: responseChanges(persisted)
     };
     assertToolResultBudget(previewResult);
     const prepared = await changesetStore.preparePublication(changeset);
@@ -2673,8 +2792,8 @@ export function createTransactionService(options: ServiceOptions = {}) {
       };
       const targetReads = projectFileReadBudget(
         "Apply target file reads",
-        limits.preview.maxFileBytes,
-        limits.preview.maxAggregateBytes,
+        readFileBytes,
+        readAggregateBytes,
         limits.scan.maxFiles,
         limits.scan.deadlineMs
       );
@@ -2705,8 +2824,8 @@ export function createTransactionService(options: ServiceOptions = {}) {
       }
       const dependencyReads = projectFileReadBudget(
         "Apply dependency file reads",
-        limits.preview.maxFileBytes,
-        limits.preview.maxAggregateBytes,
+        readFileBytes,
+        readAggregateBytes,
         limits.scan.maxFiles,
         limits.scan.deadlineMs
       );
@@ -2764,6 +2883,7 @@ export function createTransactionService(options: ServiceOptions = {}) {
         if (changeset.validatedPack && changeset.validationDependencyDigest) {
           let currentDependencyDigest: `sha256:${string}` | undefined;
           const currentValidation = await validatePack({ root: changeset.root, pack: changeset.validatedPack }, {
+            runtimePolicy: policy,
             overlay: validationOverlay,
             preaccountedOverlay: validationOverlayKeys,
             limits: options.limits,
@@ -2807,11 +2927,19 @@ export function createTransactionService(options: ServiceOptions = {}) {
       }
       return {
         applied: true,
+        policy: { ...policy },
+        authorizationSource: binding.authorizationSource,
         changesetId: request.changesetId,
-        changes: changeset.changes.map(({ previousHash: _previousHash, managedBlocks: _managedBlocks, ...change }) => change)
+        changes: responseChanges(changeset.changes)
       };
     });
   }
 
-  return { previewUpdate, inspectChangesetForApproval, issueApplyAuthorization, applyUpdate };
+  return { previewUpdate, readPreview, inspectChangesetForApproval, issueApplyAuthorization, applyUpdate };
+}
+
+function responseChanges(changes: PersistedChange[]) {
+  const full = changes.map(({ previousHash: _previousHash, managedBlocks: _managedBlocks, ...change }) => change);
+  if (Buffer.byteLength(JSON.stringify(full), "utf8") < 128 * 1024) return full;
+  return changes.map((change) => ({ path: change.path, ...(change.delete ? { delete: true as const } : { contentBytes: Buffer.byteLength(change.content!, "utf8"), contentOmitted: true }) }));
 }

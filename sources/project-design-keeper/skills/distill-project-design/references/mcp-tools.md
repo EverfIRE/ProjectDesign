@@ -1,6 +1,6 @@
 # MCP Tool Contract
 
-Use exactly these nine tools. Pass a repository root/path and repository-relative evidence paths; never invent absolute paths for pack records.
+Use these tools. Pass a repository root/path and repository-relative evidence paths; never invent absolute paths for pack records.
 
 | Tool | Role | Essential result |
 | --- | --- | --- |
@@ -13,10 +13,15 @@ Use exactly these nine tools. Pass a repository root/path and repository-relativ
 | `preview_update` | Validate and stage proposed managed changes in Keeper cache | Diff, conflicts, `changesetId`, creation/expiry time; no project write |
 | `apply_update` | Commit one confirmed changeset | Applied paths and recovery snapshot metadata, or a stale/conflict error |
 | `validate_pack` | Check schema and repository-backed integrity | Valid flag, errors, and warnings for links, IDs, records, evidence, ownership |
+| `get_settings` | Read saved policy | Easy mode, aggregate limit in MiB, settings revision |
+| `open_settings` | Open clickable settings when requested | Local browser panel; save credentials are not returned to the model |
+| `read_preview` | Page an authenticated full diff | Diff text, digest, `nextCursor`, `complete`, total bytes |
+
+The main skill's mode rule takes precedence over manual confirmation language below. Easy skips Keeper human prompts only, never automatic checks or host permissions. Settings are installation-wide for the current user; missing settings mean normal mode and 8 MiB. Aggregate is the UTF-8 bytes of final complete files to write, each path once; deletes count zero. Normal has a separate 2 MiB single-file cap; Easy has none. `preview_update` binds the saved policy revision; changes to settings require a new preview. When preview is incomplete, call `read_preview { root, changesetId, cursor: nextCursor }` repeatedly. Normal-mode review must have the complete diff available. No tool accepts an apply-time Easy override or saves settings for the model.
 
 ## Read sequence
 
-Call `scan_scope` with `view: "summary"` first. Use bounded pages and never reuse a cursor across snapshot, scope, view, or filters. Use `detect_drift` before refresh. Call `query_context { root: <repo>, query: <task>, paths: [...], modules: [...] }` with only relevant paths/modules. It never returns stale content; retrieve specifically withheld IDs through `query_history`. Use `analyze_redundancy` only for candidate recall and obtain a user decision for every candidate before preview.
+Follow the main skill's exact scope mapping: project scans start with `view: "summary"`; files mode scans each explicit file with `view: "files"`, never their common parent. Use bounded pages and never reuse a cursor across snapshot, scope, view, or filters. Use `detect_drift` before refresh. Call `query_context { root: <repo>, query: <task>, paths: [...], modules: [...] }` with only relevant paths/modules. It never returns stale content; retrieve specifically withheld IDs through `query_history`. Use `analyze_redundancy` only for candidate recall and obtain a user decision for every candidate before preview in normal mode.
 
 `validate_pack` receives the candidate canonical pack plus repository root. Resolve every diagnostic before presenting a pack as valid; report warnings that represent genuine uncertainty.
 

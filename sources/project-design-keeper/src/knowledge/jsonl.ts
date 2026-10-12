@@ -1,5 +1,6 @@
 import { TextDecoder } from "node:util";
 import { keeperLimits } from "../security/limits.js";
+import { managedReadLimits } from "../settings/policy.js";
 
 export type CanonicalJsonLinesErrorKind = "size" | "count" | "encoding" | "format" | "json";
 
@@ -28,9 +29,9 @@ export function decodeCanonicalJsonLines(
     maxLines?: number;
   } = {}
 ): CanonicalJsonLine[] {
-  const maxBytes = options.maxBytes ?? keeperLimits.preview.maxFileBytes;
+  const maxBytes = options.maxBytes ?? managedReadLimits.maxFileBytes;
   const maxLines = options.maxLines ?? keeperLimits.pack.maxRecords;
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > keeperLimits.preview.maxFileBytes) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > managedReadLimits.maxFileBytes) {
     throw new CanonicalJsonLinesError("size", `${label} byte limit is invalid`);
   }
   if (!Number.isSafeInteger(maxLines) || maxLines < 0 || maxLines > keeperLimits.pack.maxRecords) {

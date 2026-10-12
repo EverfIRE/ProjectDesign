@@ -4,8 +4,12 @@ description: "Use when planning or implementing work in a project that contains 
 metadata:
   managed-by: project-design-keeper
 ---
-<!-- project-design-keeper:managed record-id="skill.project-design-context.workflow" content-hash="sha256:09e3390c85ea9058e5e371f25210af69b7204443763ca75b481adb6e205db4da" -->
+<!-- project-design-keeper:managed record-id="skill.project-design-context.workflow" content-hash="sha256:ae5b8d68a34b81068ee760f708f7841e18665527596feefc695c43569306333f" -->
 # Project Design Context
+
+Call `get_settings` before Keeper maintenance. **Saved-mode precedence:** when `easyMode` is true, the manual design/semantic/merge/write confirmation requirements below are skipped. Continue the design comparison, automatic validation, evidence checks, preview, task scope, conflict and expiry protections. Resolve evidence-supported choices within the user's request and defer ambiguity; do not label inferred rules as human-confirmed. When Easy is false, retain the human confirmation workflow below. Never change mode or size limits to bypass a failure. User-requested configuration uses `open_settings`, a clickable local panel; there is no model save tool. Host permission prompts still apply.
+
+For paged previews, normal mode reads `read_preview` through `complete: true` before exact-preview approval. Easy does not require per-page user review. A changed settings revision requires a fresh preview. Easy removes the independent single-file cap; all final merged file content still shares the saved aggregate limit. Validate after apply in both modes.
 
 Read `docs/project-design/index.md` first. For the current task call `query_context { root: <repo>, query: <task>, paths: [...], modules: [...] }`. Use only the paths and modules found by minimum read-only discovery. If the result withholds relevant stale or terminal IDs, call `query_history` for those IDs and treat the result as historical risk, never as a current rule.
 

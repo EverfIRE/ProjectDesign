@@ -1,5 +1,9 @@
 # Workflow Contract
 
+## Saved mode
+
+Read `get_settings` before maintenance. The mode rule in the main skill overrides the confirmation language below: saved Easy mode skips Keeper human semantic/design/merge/write prompts, while retaining automatic checks and the authorized task scope. It does not turn inferred statements into human-confirmed rules. Use `open_settings` only for a user-requested settings change; saving happens in the clickable local panel. Never enable Easy or raise the limit to evade a failure. Normal mode retains the human confirmation steps. Settings changes invalidate outstanding previews; use `read_preview` to retrieve every diff page for normal-mode review.
+
 ## Operation and scope choice
 
 | Operation | Purpose | Normal end state |
@@ -211,7 +215,7 @@ The installable runtime does not ship repository development scripts. The manual
 ```powershell
 cd C:\absolute\ProjectDesignKeeper\source
 npm run package:verify
-powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/activate-installed-plugin.ps1 -PackageRoot C:\absolute\ProjectDesignKeeper\source\.package\project-design-keeper -InstallRoot C:\absolute\plugin-cache\project-design-keeper\1.0.3 -SmokeProject C:\absolute\temporary-smoke-project
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/activate-installed-plugin.ps1 -PackageRoot C:\absolute\ProjectDesignKeeper\source\.package\project-design-keeper -InstallRoot C:\absolute\plugin-cache\project-design-keeper\1.1.0 -SmokeProject C:\absolute\temporary-smoke-project
 ```
 
 Packaging captures at most 256 allowlisted entries to depth 16, with a 16 MiB per-file and 64 MiB aggregate budget. It binds reads to file identity plus high-resolution change timestamps, copies only the captured bytes, and re-captures the source before and after publication so a concurrent source change cannot produce a successful mixed-version package. Verification and installed smoke require the exact 25-file topology, cap JSON at 256 KiB, and use the same 16 MiB/64 MiB file budgets.

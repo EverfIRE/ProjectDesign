@@ -58,9 +58,12 @@ try {
       "analyze_redundancy",
       "apply_update",
       "detect_drift",
+  "get_settings",
+  "open_settings",
       "preview_update",
       "query_context",
       "query_history",
+  "read_preview",
       "scan_scope",
       "search_evidence",
       "validate_pack"

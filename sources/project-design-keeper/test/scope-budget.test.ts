@@ -500,7 +500,7 @@ describe("cold scan budgets", () => {
     const manifestPath = join(packRoot, "manifest.json");
     const handle = await open(manifestPath, "w");
     try {
-      await handle.truncate(8 * 1024 * 1024 + 1);
+      await handle.truncate(64 * 1024 * 1024 + 1);
     } finally {
       await handle.close();
     }
@@ -510,7 +510,7 @@ describe("cold scan budgets", () => {
       scopeIo: { beforeRepositoryContentRead: async () => { contentReads += 1; } }
     });
 
-    await expect(api.queryContext({ root: projectRoot, query: "needle" })).rejects.toThrow(/file.*bytes|8.*MiB|limit/iu);
+    await expect(api.queryContext({ root: projectRoot, query: "needle" })).rejects.toThrow(/file.*bytes|64.*MiB|limit/iu);
     expect(contentReads).toBe(0);
   });
 

@@ -17,9 +17,12 @@ const expectedTools = [
   "analyze_redundancy",
   "apply_update",
   "detect_drift",
+  "get_settings",
+  "open_settings",
   "preview_update",
   "query_context",
   "query_history",
+  "read_preview",
   "scan_scope",
   "search_evidence",
   "validate_pack"
@@ -143,14 +146,14 @@ function expectProtocolResult(result: Awaited<ReturnType<Client["callTool"]>>): 
 }
 
 describe("Project Design Keeper MCP protocol", () => {
-  test("lists exactly nine tools with safe instructions and accurate annotations", async () => {
+  test("lists exactly twelve tools with safe instructions and accurate annotations", async () => {
     await withClient(async (client) => {
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name).sort()).toEqual(expectedTools);
 
       const instructions = client.getInstructions() ?? "";
       expect(instructions.slice(0, 512)).toMatch(
-        /scan\/search.*preview.*show diff\/conflicts.*explicit user confirmation.*apply.*unexpired change-set/is
+        /scan\/search.*preview.*diff\/conflicts.*apply.*unexpired change-set.*Normal mode requires explicit user confirmation/is
       );
 
       const byName = Object.fromEntries(listed.tools.map((tool) => [tool.name, tool]));
@@ -190,7 +193,8 @@ describe("Project Design Keeper MCP protocol", () => {
         analyze_redundancy: ["root", "query", "paths", "modules"],
         preview_update: ["root", "path", "changes", "expectedContentHash", "pack", "analysisId", "redundancyDecisions"],
         apply_update: ["root", "changesetId", "changeset"],
-        validate_pack: ["root", "pack"]
+        validate_pack: ["root", "pack"],
+        get_settings: [], open_settings: [], read_preview: ["root", "changesetId", "cursor"]
       };
       const expectedRequired: Record<string, string[]> = {
         scan_scope: [],
@@ -201,7 +205,8 @@ describe("Project Design Keeper MCP protocol", () => {
         analyze_redundancy: ["root"],
         preview_update: ["root", "changes"],
         apply_update: ["root"],
-        validate_pack: ["root", "pack"]
+        validate_pack: ["root", "pack"],
+        get_settings: [], open_settings: [], read_preview: ["root", "changesetId"]
       };
 
       for (const [name, propertyNames] of Object.entries(expectedProperties)) {
@@ -618,7 +623,7 @@ describe("Project Design Keeper MCP protocol", () => {
     });
   });
 
-  test("does not persist a real preview whose complete MCP-facing result exceeds one MiB", async () => {
+  test("persists a real large preview and offers bounded complete diff pages", async () => {
     const cacheDirectory = await mkdtemp(join(tmpdir(), "project-design-mcp-result-budget-"));
     const server = await createProjectDesignKeeper({ cacheDirectory }).createMcpServer();
     const { client, server: connected } = await connectServer(server);
@@ -634,11 +639,12 @@ describe("Project Design Keeper MCP protocol", () => {
         }
       });
 
-      expect(result).toMatchObject({
-        isError: true,
-        structuredContent: { error: expect.stringMatching(/one MiB|response budget/i) }
-      });
-      await expect(readdir(join(cacheDirectory, "changesets"))).resolves.toEqual([]);
+      expect(result.isError).not.toBe(true);
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(1024 * 1024);
+      const preview = result.structuredContent as Record<string, unknown>;
+      const page = await client.callTool({ name: "read_preview", arguments: { root: currentFixture().repository, changesetId: preview.changesetId } });
+      expect(page.isError).not.toBe(true);
+      expect(page.structuredContent).toMatchObject({ diff: expect.any(String), totalBytes: expect.any(Number) });
     } finally {
       await client.close();
       await connected.close();

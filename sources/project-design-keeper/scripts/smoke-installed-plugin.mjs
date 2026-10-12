@@ -39,9 +39,12 @@ const exactTools = [
   "analyze_redundancy",
   "apply_update",
   "detect_drift",
+  "get_settings",
+  "open_settings",
   "preview_update",
   "query_context",
   "query_history",
+  "read_preview",
   "scan_scope",
   "search_evidence",
   "validate_pack"
@@ -700,11 +703,11 @@ async function validateInstalledIdentity(root) {
   const pkg = readJson(installedFiles.get("package.json"), "Installed package manifest");
   const configuration = readJson(installedFiles.get(".mcp.json"), "Installed MCP manifest");
   assert.equal(plugin.name, "project-design-keeper", "Wrong installed package identity in plugin manifest");
-  assert.equal(plugin.version, "1.0.3", "Wrong installed package identity in plugin manifest");
+  assert.equal(plugin.version, "1.1.0", "Wrong installed package identity in plugin manifest");
   assert.equal(plugin.skills, "./skills/", "Wrong installed package skill root");
   assert.equal(plugin.mcpServers, "./.mcp.json", "Wrong installed package MCP manifest");
   assert.equal(pkg.name, "project-design-keeper", "Wrong installed package identity in package manifest");
-  assert.equal(pkg.version, "1.0.3", "Wrong installed package identity in package manifest");
+  assert.equal(pkg.version, "1.1.0", "Wrong installed package identity in package manifest");
   const parameters = configuration.mcpServers?.["project-design-keeper"];
   assert.deepEqual(parameters, { command: "node", args: ["dist/index.js"], cwd: "." }, "Wrong installed package MCP command");
   return { parameters, installedFiles };
@@ -761,7 +764,7 @@ const transport = new StdioClientTransport({
   env: childEnvironment,
   stderr: "pipe"
 });
-const client = new Client({ name: "keeper-installed-smoke", version: "1.0.3" });
+const client = new Client({ name: "keeper-installed-smoke", version: "1.1.0" });
 let operationError;
 let stderr = "";
 let stderrBytes = 0;
@@ -793,7 +796,7 @@ try {
   await assert.rejects(lstat(outputPath), { code: "ENOENT" });
   await client.connect(transport);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
-  assert.deepEqual(names, exactTools, "Installed MCP tool catalog must contain the exact nine sorted tools");
+  assert.deepEqual(names, exactTools, "Installed MCP tool catalog must contain the exact twelve sorted tools");
 
   const validation = await client.callTool({
     name: "validate_pack",

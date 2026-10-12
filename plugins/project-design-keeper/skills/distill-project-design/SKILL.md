@@ -11,6 +11,12 @@ Maintain an evidence-backed Project Design Keeper memory layer. Initialize, refr
 
 ## Start the Run
 
+Call `get_settings` to read the saved mode before maintenance. If the user asks to configure Keeper, call `open_settings`; the clickable local panel provides the Easy switch and aggregate limit (1–64 MiB, default 8). Never change settings yourself to make a failed operation pass.
+
+**Mode rule (takes precedence over confirmation steps below and in references):** Normal mode requires the existing semantic and exact-preview human confirmations. When saved `easyMode` is true, skip Keeper chat/design/merge/write confirmation prompts and the digest form. Continue all automatic validation, evidence checks, scope constraints, preview, expiry, conflict protection and post-write validation. Choose evidence-supported maintenance actions within the user's request; keep ambiguity descriptive or deferred. Do not claim inferred norms were human-confirmed: code-derived statements remain `observed` / `informational` unless the user has actually established the rule. Host tool permissions remain in force.
+
+Preview reports its frozen policy and revision. If settings change, generate a new preview. Large diffs expose `nextCursor`: in normal mode read `read_preview` pages through `complete: true` and provide the complete review path before approval; in Easy mode pages remain available without requiring the user to review each one. Never call a partial diff complete. Easy has no independent single-file write limit; final merged files together must fit the configured aggregate limit. Normal mode also limits each new file to 2 MiB. Deletes add zero write bytes.
+
 State four choices before calling a tool:
 
 - operation: `initialize`, `refresh`, `audit`, or `distill`;

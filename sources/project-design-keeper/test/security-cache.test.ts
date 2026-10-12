@@ -33,6 +33,11 @@ import {
   createPublicationClaimOwner,
   parsePublicationClaimOwner
 } from "../src/security/publication-claim.js";
+import { changesetRemovalRecoveryLimits } from "../src/security/limits.js";
+
+// Keep eight MiB of aggregate headroom so the 7/9 MiB race fixtures still
+// cross the current boundary without allocating their sparse file contents.
+const recoveryFixtureArtifactBytes = Math.floor((changesetRemovalRecoveryLimits.maxBytes - 8 * 1024 * 1024) / 10);
 
 const roots: string[] = [];
 
@@ -1302,12 +1307,12 @@ test("cleans a partially written candidate after a later write fault without pub
 test("rescans exact physical-byte headroom after a candidate write mutation before writing the remainder", async () => {
   const root = await fixtureRoot();
   const layout = await prepareSecureCache({ cacheDirectory: join(root, "cache") }, join(root, "project"));
-  const maximumJournalBytes = 128 * 1024 * 1024;
-  const fixedArtifactBytes = 10 * 12 * 1024 * 1024;
+  const maximumJournalBytes = changesetRemovalRecoveryLimits.maxBytes;
+  const fixedArtifactBytes = 10 * recoveryFixtureArtifactBytes;
   for (let index = 0; index < 10; index += 1) {
     const path = join(layout.locks, `.removed-${randomUUID()}.data`);
     const artifact = await open(path, "wx", 0o600);
-    try { await artifact.truncate(12 * 1024 * 1024); } finally { await artifact.close(); }
+    try { await artifact.truncate(recoveryFixtureArtifactBytes); } finally { await artifact.close(); }
   }
   const growerPath = join(layout.locks, `.removed-${randomUUID()}.data`);
   const grower = await open(growerPath, "wx", 0o600);
@@ -1370,7 +1375,7 @@ test("rescans exact physical-byte headroom after a candidate write mutation befo
   expect(maximumVisibleBytes).toBe(maximumJournalBytes);
   expect(writerCalls).toBe(1);
   expect(failure).toBeInstanceOf(Error);
-  expect((failure as Error).message).toMatch(/headroom|bytes|134217728|limit/i);
+  expect((failure as Error).message).toMatch(/headroom|bytes|limit/i);
   const candidate = await stat(candidatePath);
   expect(candidate.size).toBeGreaterThan(0);
   expect(candidate.size).toBeLessThan(4 * 1024);
@@ -1569,20 +1574,20 @@ test("reserves physical journal bytes before moving a maximum-sized target", asy
   for (let index = 0; index < 10; index += 1) {
     const path = join(layout.locks, `.removed-${randomUUID()}.data`);
     const handle = await open(path, "wx", 0o600);
-    try { await handle.truncate(12 * 1024 * 1024); } finally { await handle.close(); }
+    try { await handle.truncate(recoveryFixtureArtifactBytes); } finally { await handle.close(); }
     evidence.push(path);
   }
   const target = join(layout.changesets, "byte-headroom-target.json");
   const targetHandle = await open(target, "wx", 0o600);
-  try { await targetHandle.truncate(12 * 1024 * 1024); } finally { await targetHandle.close(); }
+  try { await targetHandle.truncate(changesetRemovalRecoveryLimits.maxArtifactBytes); } finally { await targetHandle.close(); }
   const identity = await captureSecurePathIdentity(layout, target, "file");
   const before = (await readdir(layout.locks)).sort();
 
-  await expect(safeRemoveExactCacheFile(layout, identity)).rejects.toThrow(/headroom|bytes|134217728|limit/i);
+  await expect(safeRemoveExactCacheFile(layout, identity)).rejects.toThrow(/headroom|bytes|limit/i);
 
   expect((await readdir(layout.locks)).sort()).toEqual(before);
-  await expect(stat(target)).resolves.toMatchObject({ size: 12 * 1024 * 1024 });
-  await expect(stat(evidence[0]!)).resolves.toMatchObject({ size: 12 * 1024 * 1024 });
+  await expect(stat(target)).resolves.toMatchObject({ size: changesetRemovalRecoveryLimits.maxArtifactBytes });
+  await expect(stat(evidence[0]!)).resolves.toMatchObject({ size: recoveryFixtureArtifactBytes });
 });
 
 test("serializes concurrent removal journal headroom reservations and preserves the refused target", async () => {
@@ -1659,7 +1664,7 @@ test("rechecks target and existing physical bytes after the last pre-link hook",
   for (let index = 0; index < 10; index += 1) {
     const path = join(layout.locks, `.removed-${randomUUID()}.data`);
     const handle = await open(path, "wx", 0o600);
-    try { await handle.truncate(12 * 1024 * 1024); } finally { await handle.close(); }
+    try { await handle.truncate(recoveryFixtureArtifactBytes); } finally { await handle.close(); }
   }
   const target = join(layout.changesets, "prelink-byte-race-target.json");
   const targetHandle = await open(target, "wx", 0o600);
@@ -1671,7 +1676,7 @@ test("rechecks target and existing physical bytes after the last pre-link hook",
       const handle = await open(target, "r+");
       try { await handle.truncate(9 * 1024 * 1024); } finally { await handle.close(); }
     }
-  })).rejects.toThrow(/headroom|bytes|134217728|limit/i);
+  })).rejects.toThrow(/headroom|bytes|limit/i);
 
   await expect(stat(target)).resolves.toMatchObject({ size: 9 * 1024 * 1024 });
   expect((await readdir(layout.locks)).filter((name) => name.startsWith(".remove-"))).toEqual([]);
@@ -1817,17 +1822,17 @@ test("bounds aggregate removal-recovery artifact bytes independently of entry co
     const path = join(layout.locks, `.removed-${randomUUID()}.data`);
     const handle = await open(path, "wx", 0o600);
     try {
-      await handle.truncate(12 * 1024 * 1024);
+      await handle.truncate(recoveryFixtureArtifactBytes);
     } finally {
       await handle.close();
     }
     artifacts.push(path);
   }
 
-  await expect(reconcileExactRemovalIntents(layout)).rejects.toThrow(/recovery bytes|134217728|limit/i);
+  await expect(reconcileExactRemovalIntents(layout)).rejects.toThrow(/recovery bytes|limit/i);
 
-  await expect(stat(artifacts[0]!)).resolves.toMatchObject({ size: 12 * 1024 * 1024 });
-  await expect(stat(artifacts.at(-1)!)).resolves.toMatchObject({ size: 12 * 1024 * 1024 });
+  await expect(stat(artifacts[0]!)).resolves.toMatchObject({ size: recoveryFixtureArtifactBytes });
+  await expect(stat(artifacts.at(-1)!)).resolves.toMatchObject({ size: recoveryFixtureArtifactBytes });
 });
 
 test("enforces a monotonic deadline while preserving fresh removal residue", async () => {
@@ -2023,7 +2028,7 @@ test("rejects a quarantine grown above its artifact limit before syncing or dele
     beforeRemovalArtifactUse: async (path: string, kind: string) => {
       if (path === quarantine && kind === "quarantine") {
         const handle = await open(path, "r+");
-        try { await handle.truncate(12 * 1024 * 1024 + 1); } finally { await handle.close(); }
+        try { await handle.truncate(changesetRemovalRecoveryLimits.maxArtifactBytes + 1); } finally { await handle.close(); }
       }
     }
   } as Parameters<typeof reconcileExactRemovalIntents>[1] & {
@@ -2032,7 +2037,7 @@ test("rejects a quarantine grown above its artifact limit before syncing or dele
 
   await expect(reconcileExactRemovalIntents(layout, hooks)).rejects.toThrow(/quarantine|artifact|bytes|limit/i);
 
-  await expect(stat(quarantine)).resolves.toMatchObject({ size: 12 * 1024 * 1024 + 1 });
+  await expect(stat(quarantine)).resolves.toMatchObject({ size: changesetRemovalRecoveryLimits.maxArtifactBytes + 1 });
 });
 
 test("revalidates aggregate bytes after a retained artifact grows between scan and use", async () => {
@@ -2041,7 +2046,7 @@ test("revalidates aggregate bytes after a retained artifact grows between scan a
   for (let index = 0; index < 10; index += 1) {
     const path = join(layout.locks, `.removed-${randomUUID()}.data`);
     const handle = await open(path, "wx", 0o600);
-    try { await handle.truncate(12 * 1024 * 1024); } finally { await handle.close(); }
+    try { await handle.truncate(recoveryFixtureArtifactBytes); } finally { await handle.close(); }
   }
   const growing = join(layout.locks, `.removed-${randomUUID()}.data`);
   await writeFile(growing, "x", { mode: 0o600 });
@@ -2056,7 +2061,7 @@ test("revalidates aggregate bytes after a retained artifact grows between scan a
     beforeRemovalArtifactUse(path: string, kind: string): Promise<void>;
   };
 
-  await expect(reconcileExactRemovalIntents(layout, hooks)).rejects.toThrow(/recovery bytes|134217728|limit/i);
+  await expect(reconcileExactRemovalIntents(layout, hooks)).rejects.toThrow(/recovery bytes|limit/i);
 
   await expect(stat(growing)).resolves.toMatchObject({ size: 9 * 1024 * 1024 });
 });
@@ -2471,7 +2476,7 @@ test("rebuilds physical-byte headroom after all pre-quarantine resource hooks", 
   for (let index = 0; index < 10; index += 1) {
     const path = join(layout.locks, `.removed-00000000-0000-4000-8000-${String(index + 10).padStart(12, "0")}.data`);
     const handle = await open(path, "wx", 0o600);
-    try { await handle.truncate(12 * 1024 * 1024); } finally { await handle.close(); }
+    try { await handle.truncate(recoveryFixtureArtifactBytes); } finally { await handle.close(); }
   }
   const growing = join(layout.locks, ".removed-00000000-0000-4000-8000-000000000001.data");
   const trigger = join(layout.locks, ".removed-ffffffff-ffff-4fff-bfff-ffffffffffff.data");
@@ -2493,7 +2498,7 @@ test("rebuilds physical-byte headroom after all pre-quarantine resource hooks", 
     closeExactRemovalResource(resource: { close(): Promise<void> }, path: string, kind: string): Promise<void>;
   };
 
-  await expect(safeRemoveExactCacheFile(layout, identity, hooks)).rejects.toThrow(/headroom|bytes|134217728|limit/i);
+  await expect(safeRemoveExactCacheFile(layout, identity, hooks)).rejects.toThrow(/headroom|bytes|limit/i);
 
   expect(grown).toBe(true);
   await expect(readFile(target, "utf8")).resolves.toBe("original");
@@ -2688,7 +2693,7 @@ test("rejects aggregate retained-byte growth introduced after an artifact was re
   for (let index = 0; index < 10; index += 1) {
     const path = join(layout.locks, `.removed-${randomUUID()}.data`);
     const handle = await open(path, "wx", 0o600);
-    try { await handle.truncate(12 * 1024 * 1024); } finally { await handle.close(); }
+    try { await handle.truncate(recoveryFixtureArtifactBytes); } finally { await handle.close(); }
   }
   const growing = join(layout.locks, ".removed-00000000-0000-4000-8000-000000000001.data");
   const trigger = join(layout.locks, ".removed-00000000-0000-4000-8000-000000000002.data");
@@ -2709,7 +2714,7 @@ test("rejects aggregate retained-byte growth introduced after an artifact was re
     beforeRemovalArtifactUse(path: string, kind: string): Promise<void>;
   };
 
-  await expect(reconcileExactRemovalIntents(layout, hooks)).rejects.toThrow(/recovery bytes|134217728|limit/i);
+  await expect(reconcileExactRemovalIntents(layout, hooks)).rejects.toThrow(/recovery bytes|limit/i);
   await expect(stat(growing)).resolves.toMatchObject({ size: 9 * 1024 * 1024 });
 });
 
@@ -2725,7 +2730,7 @@ test("revalidates and charges a bound quarantine mutated immediately after file 
     afterExactRemovalArtifactSync: async (path: string) => {
       if (path === quarantine) {
         const handle = await open(path, "r+");
-        try { await handle.truncate(12 * 1024 * 1024 + 1); } finally { await handle.close(); }
+        try { await handle.truncate(changesetRemovalRecoveryLimits.maxArtifactBytes + 1); } finally { await handle.close(); }
       }
     }
   } as Parameters<typeof reconcileExactRemovalIntents>[1] & {
@@ -2733,7 +2738,7 @@ test("revalidates and charges a bound quarantine mutated immediately after file 
   };
 
   await expect(reconcileExactRemovalIntents(layout, hooks)).rejects.toThrow(/artifact|bytes|limit|sync/i);
-  await expect(stat(quarantine)).resolves.toMatchObject({ size: 12 * 1024 * 1024 + 1 });
+  await expect(stat(quarantine)).resolves.toMatchObject({ size: changesetRemovalRecoveryLimits.maxArtifactBytes + 1 });
 });
 
 test.runIf(process.platform !== "win32" && typeof process.getuid === "function" && process.getuid() === 0)(

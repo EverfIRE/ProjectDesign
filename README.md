@@ -29,6 +29,14 @@ Then complete the Codex UI steps:
 
 You can then invoke a plugin skill directly, for example `$distill-project-design`, `$unreal-chaos-physics`, `$surveying-real-time-physics-research`, or `$reproducing-simulation-papers`.
 
+## Keeper settings (1.1.0)
+
+Ask Keeper “打开 Keeper 设置” to open its clickable local browser panel. The panel contains an **Easy 模式** switch and a **单次更新合计上限** input (1–64 MiB; default 8). Settings persist for the current user's Keeper installation across projects and upgrades. Save applies to the next operation without restarting.
+
+Easy skips Keeper's human confirmation prompts while preserving automatic validation, evidence, path, signature, expiry, concurrency and recovery checks. It has no independent single-file write cap; final file contents must fit the configured aggregate limit. Normal mode remains the default and retains its 2 MiB single-file cap. Large preview diffs are available in complete authenticated pages through `read_preview`. Changing settings requires a fresh preview. Host tool permissions are unaffected.
+
+The panel runs on loopback only and expires after 15 minutes. Use the browser page opened by Keeper to edit; the returned tokenless URL is read-only in a different browser session. No tool saves settings on the model's behalf.
+
 ## Repository layout and maintenance boundary
 
 | Path | Purpose |

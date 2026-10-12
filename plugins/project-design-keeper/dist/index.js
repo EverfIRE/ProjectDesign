@@ -915,10 +915,10 @@ var require_codegen = __commonJS({
         return this._leafNode(new Throw(error2));
       }
       // start self-balancing block
-      block(body, nodeCount) {
+      block(body2, nodeCount) {
         this._blockStarts.push(this._nodes.length);
-        if (body)
-          this.code(body).endBlock(nodeCount);
+        if (body2)
+          this.code(body2).endBlock(nodeCount);
         return this;
       }
       // end the current self-balancing block
@@ -2343,15 +2343,15 @@ var require_validate = __commonJS({
       validateFunction(it, () => (0, boolSchema_1.topBoolOrEmptySchema)(it));
     }
     exports.validateFunctionCode = validateFunctionCode;
-    function validateFunction({ gen, validateName, schema, schemaEnv, opts }, body) {
+    function validateFunction({ gen, validateName, schema, schemaEnv, opts }, body2) {
       if (opts.code.es5) {
         gen.func(validateName, (0, codegen_1._)`${names_1.default.data}, ${names_1.default.valCxt}`, schemaEnv.$async, () => {
           gen.code((0, codegen_1._)`"use strict"; ${funcSourceUrl(schema, opts)}`);
           destructureValCxtES5(gen, opts);
-          gen.code(body);
+          gen.code(body2);
         });
       } else {
-        gen.func(validateName, (0, codegen_1._)`${names_1.default.data}, ${destructureValCxt(opts)}`, schemaEnv.$async, () => gen.code(funcSourceUrl(schema, opts)).code(body));
+        gen.func(validateName, (0, codegen_1._)`${names_1.default.data}, ${destructureValCxt(opts)}`, schemaEnv.$async, () => gen.code(funcSourceUrl(schema, opts)).code(body2));
       }
     }
     function destructureValCxt(opts) {
@@ -7184,8 +7184,8 @@ var ZodIssueCode = util.arrayToEnum([
   "not_finite"
 ]);
 var quotelessJson = (obj) => {
-  const json = JSON.stringify(obj, null, 2);
-  return json.replace(/"([^"]+)":/g, "$1:");
+  const json2 = JSON.stringify(obj, null, 2);
+  return json2.replace(/"([^"]+)":/g, "$1:");
 };
 var ZodError = class _ZodError extends Error {
   get errors() {
@@ -11008,6 +11008,22 @@ import { TextDecoder as TextDecoder2 } from "node:util";
 
 // src/security/limits.ts
 import { performance } from "node:perf_hooks";
+
+// src/settings/policy.ts
+var defaultRuntimePolicy = Object.freeze({ revision: "defaults-v1", easyMode: false, maxUpdateMiB: 8 });
+var maximumUpdateBytes = 64 * 1024 * 1024;
+var managedReadLimits = Object.freeze({ maxFileBytes: maximumUpdateBytes, maxAggregateBytes: 256 * 1024 * 1024 });
+function freezeRuntimePolicy(value = defaultRuntimePolicy) {
+  if (!value || typeof value.revision !== "string" || value.revision.length === 0 || value.revision.length > 128 || typeof value.easyMode !== "boolean" || !Number.isInteger(value.maxUpdateMiB) || value.maxUpdateMiB < 1 || value.maxUpdateMiB > 64) {
+    throw new Error("Invalid trusted runtime settings policy");
+  }
+  return Object.freeze({ revision: value.revision, easyMode: value.easyMode, maxUpdateMiB: value.maxUpdateMiB });
+}
+function sameRuntimePolicy(left, right) {
+  return left.revision === right.revision && left.easyMode === right.easyMode && left.maxUpdateMiB === right.maxUpdateMiB;
+}
+
+// src/security/limits.ts
 var keeperLimits = Object.freeze({
   mcpArgumentBytes: 8 * 1024 * 1024,
   preview: Object.freeze({
@@ -11045,8 +11061,8 @@ var keeperLimits = Object.freeze({
 var changesetRemovalRecoveryLimits = Object.freeze({
   maxEntries: keeperLimits.changesets.maxPairsGlobal * 4,
   maxWork: keeperLimits.changesets.maxPairsGlobal * 16,
-  maxBytes: keeperLimits.changesets.maxTotalBytes,
-  maxArtifactBytes: keeperLimits.changesets.maxChangesetBytes,
+  maxBytes: 2 * 1024 * 1024 * 1024,
+  maxArtifactBytes: 512 * 1024 * 1024,
   deadlineMs: 3e4
 });
 function cappedOverride(label, hardLimit, override) {
@@ -11054,25 +11070,29 @@ function cappedOverride(label, hardLimit, override) {
   positiveLimit(label, override, "units");
   return Math.min(override, hardLimit);
 }
-function resolveKeeperLimits(overrides = {}) {
+function resolveKeeperLimits(overrides = {}, runtimePolicy) {
+  const policy = runtimePolicy ? freezeRuntimePolicy(runtimePolicy) : void 0;
+  const writeBytes = policy ? policy.maxUpdateMiB * 1024 * 1024 : keeperLimits.preview.maxAggregateBytes;
+  const argumentBytes = policy ? writeBytes * 12 + keeperLimits.mcpArgumentBytes : keeperLimits.mcpArgumentBytes;
+  const fileBytes = policy?.easyMode ? writeBytes : keeperLimits.preview.maxFileBytes;
   const preview = overrides.preview;
   const changesets = overrides.changesets;
   const pack = overrides.pack;
   const scan2 = overrides.scan;
   const redundancy = overrides.redundancy;
   return Object.freeze({
-    mcpArgumentBytes: cappedOverride("MCP argument bytes", keeperLimits.mcpArgumentBytes, overrides.mcpArgumentBytes),
+    mcpArgumentBytes: cappedOverride("MCP argument bytes", argumentBytes, overrides.mcpArgumentBytes),
     preview: Object.freeze({
       maxChanges: cappedOverride("Preview changes", keeperLimits.preview.maxChanges, preview?.maxChanges),
-      maxFileBytes: cappedOverride("Preview file bytes", keeperLimits.preview.maxFileBytes, preview?.maxFileBytes),
-      maxAggregateBytes: cappedOverride("Preview aggregate bytes", keeperLimits.preview.maxAggregateBytes, preview?.maxAggregateBytes),
+      maxFileBytes: cappedOverride("Preview file bytes", fileBytes, preview?.maxFileBytes),
+      maxAggregateBytes: cappedOverride("Preview aggregate bytes", writeBytes, preview?.maxAggregateBytes),
       maxDiffBytes: cappedOverride("Preview diff bytes", keeperLimits.preview.maxDiffBytes, preview?.maxDiffBytes)
     }),
     changesets: Object.freeze({
       maxPairsPerProject: cappedOverride("Changesets per project", keeperLimits.changesets.maxPairsPerProject, changesets?.maxPairsPerProject),
       maxPairsGlobal: cappedOverride("Global changesets", keeperLimits.changesets.maxPairsGlobal, changesets?.maxPairsGlobal),
-      maxTotalBytes: cappedOverride("Changeset cache bytes", keeperLimits.changesets.maxTotalBytes, changesets?.maxTotalBytes),
-      maxChangesetBytes: cappedOverride("Changeset bytes", keeperLimits.changesets.maxChangesetBytes, changesets?.maxChangesetBytes),
+      maxTotalBytes: cappedOverride("Changeset cache bytes", policy ? 2 * 1024 * 1024 * 1024 : keeperLimits.changesets.maxTotalBytes, changesets?.maxTotalBytes),
+      maxChangesetBytes: cappedOverride("Changeset bytes", policy ? maximumUpdateBytes * 8 : keeperLimits.changesets.maxChangesetBytes, changesets?.maxChangesetBytes),
       maxSignatureBytes: cappedOverride("Changeset signature bytes", keeperLimits.changesets.maxSignatureBytes, changesets?.maxSignatureBytes)
     }),
     pack: Object.freeze({
@@ -11184,9 +11204,9 @@ var CanonicalJsonLinesError = class extends Error {
   }
 };
 function decodeCanonicalJsonLines(bytes, label, options = {}) {
-  const maxBytes = options.maxBytes ?? keeperLimits.preview.maxFileBytes;
+  const maxBytes = options.maxBytes ?? managedReadLimits.maxFileBytes;
   const maxLines = options.maxLines ?? keeperLimits.pack.maxRecords;
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > keeperLimits.preview.maxFileBytes) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > managedReadLimits.maxFileBytes) {
     throw new CanonicalJsonLinesError("size", `${label} byte limit is invalid`);
   }
   if (!Number.isSafeInteger(maxLines) || maxLines < 0 || maxLines > keeperLimits.pack.maxRecords) {
@@ -11926,21 +11946,31 @@ function assertPackInputLimits(pack, budget) {
 }
 function managedBlocks(markdown, onMatch = () => void 0) {
   const blocks = [];
-  const expression = /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->([\s\S]*?)<!-- \/project-design-keeper:managed -->/gu;
+  const expression = /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->/gu;
+  const close = "<!-- /project-design-keeper:managed -->";
   let match;
   while ((match = expression.exec(markdown)) !== null) {
+    const bodyStart = expression.lastIndex;
+    const bodyEnd = markdown.indexOf(close, bodyStart);
+    if (bodyEnd < 0) break;
+    expression.lastIndex = bodyEnd + close.length;
     onMatch();
-    blocks.push({ id: match[1], declaredHash: match[2], content: match[3] });
+    blocks.push({ id: match[1], declaredHash: match[2], content: markdown.slice(bodyStart, bodyEnd) });
   }
   return blocks;
 }
 function derivedBlocks(markdown, onMatch = () => void 0) {
   const blocks = [];
-  const expression = /<!-- project-design-keeper:derived document-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->([\s\S]*?)<!-- \/project-design-keeper:derived -->/gu;
+  const expression = /<!-- project-design-keeper:derived document-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->/gu;
+  const close = "<!-- /project-design-keeper:derived -->";
   let match;
   while ((match = expression.exec(markdown)) !== null) {
+    const bodyStart = expression.lastIndex;
+    const bodyEnd = markdown.indexOf(close, bodyStart);
+    if (bodyEnd < 0) break;
+    expression.lastIndex = bodyEnd + close.length;
     onMatch();
-    blocks.push({ id: match[1], declaredHash: match[2], content: match[3] });
+    blocks.push({ id: match[1], declaredHash: match[2], content: markdown.slice(bodyStart, bodyEnd) });
   }
   return blocks;
 }
@@ -11955,16 +11985,28 @@ function markdownLinks(markdown, onMatch = () => void 0) {
   return links;
 }
 function currentKnowledgeMarkdown(markdown, terminalRecordIds) {
-  return markdown.replace(
-    /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="sha256:[a-f0-9]{64}" -->([\s\S]*?)<!-- \/project-design-keeper:managed -->/gu,
-    (block, recordId) => terminalRecordIds.has(recordId) ? "" : block
-  );
+  const expression = /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="sha256:[a-f0-9]{64}" -->/gu;
+  const close = "<!-- /project-design-keeper:managed -->";
+  const retained = [];
+  let offset = 0;
+  let match;
+  while ((match = expression.exec(markdown)) !== null) {
+    const bodyEnd = markdown.indexOf(close, expression.lastIndex);
+    if (bodyEnd < 0) break;
+    expression.lastIndex = bodyEnd + close.length;
+    if (terminalRecordIds.has(match[1])) {
+      retained.push(markdown.slice(offset, match.index));
+      offset = expression.lastIndex;
+    }
+  }
+  retained.push(markdown.slice(offset));
+  return retained.join("");
 }
 function normalizedStatement(statement) {
   return statement.normalize("NFKC").toLocaleLowerCase("en-US").replace(/[\p{P}\p{S}\s]+/gu, "");
 }
 function createPackValidationBudget(options) {
-  const limits = resolveKeeperLimits(options.limits);
+  const limits = resolveKeeperLimits(options.limits, options.runtimePolicy);
   const externalBudget = options.resourceBudget;
   if (externalBudget && (!Number.isSafeInteger(externalBudget.maxFileBytes) || externalBudget.maxFileBytes < 0)) {
     throw new Error("Pack validation shared file byte limit must be a non-negative integer");
@@ -12056,6 +12098,11 @@ async function validatePack(input, options = {}) {
     return { valid: false, errors: [validationDiagnostic("root_invalid", "root", "The repository root cannot be resolved")], warnings: [] };
   }
   const overlay = /* @__PURE__ */ new Map();
+  const managedFileBytes = options.runtimePolicy ? Math.min(
+    managedReadLimits.maxFileBytes,
+    options.resourceBudget?.maxFileBytes ?? managedReadLimits.maxFileBytes,
+    options.limits?.scan?.maxFileBytes ?? Infinity
+  ) : budget.maxFileBytes;
   const overlayPaths = /* @__PURE__ */ new Map();
   const preaccountedOverlay = new Set(
     [...options.preaccountedOverlay ?? []].map(windowsRepositoryPathKey)
@@ -12082,8 +12129,8 @@ async function validatePack(input, options = {}) {
     const key = windowsRepositoryPathKey(path);
     accountFile(key);
     if (contents !== void 0) {
-      if (contents.byteLength > budget.maxFileBytes) {
-        throw new Error(`Pack validation file ${path} exceeds the limit of ${budget.maxFileBytes} bytes`);
+      if (contents.byteLength > managedFileBytes) {
+        throw new Error(`Pack validation file ${path} exceeds the limit of ${managedFileBytes} bytes`);
       }
       budget.bytes.consume(contents.byteLength);
       if (!preaccountedOverlay.has(key)) budget.externalBytes?.consume(contents.byteLength);
@@ -12202,8 +12249,9 @@ async function validatePack(input, options = {}) {
     if (!Number.isSafeInteger(size) || size < 0) {
       throw new Error(`Pack validation file ${path} has an invalid byte length`);
     }
-    if (size > budget.maxFileBytes) {
-      throw new Error(`Pack validation file ${path} exceeds the limit of ${budget.maxFileBytes} bytes`);
+    const fileLimit = safeRepositoryPath(path, true) ? managedFileBytes : budget.maxFileBytes;
+    if (size > fileLimit) {
+      throw new Error(`Pack validation file ${path} exceeds the limit of ${fileLimit} bytes`);
     }
     let canonical2;
     try {
@@ -12769,7 +12817,7 @@ async function validatePack(input, options = {}) {
       try {
         lines = decodeCanonicalJsonLines(view.contents, `Archive generation ${generation.path}`, {
           expectedCount: generation.recordCount,
-          maxBytes: Math.min(budget.maxFileBytes, keeperLimits.preview.maxFileBytes),
+          maxBytes: managedFileBytes,
           maxLines: Math.min(limits.pack.maxRecords, limits.scan.maxEvidence)
         });
       } catch (error2) {
@@ -12841,7 +12889,7 @@ async function validatePack(input, options = {}) {
         try {
           lines = decodeCanonicalJsonLines(view.contents, `History tombstone ${tombstones.path}`, {
             expectedCount: tombstones.count,
-            maxBytes: Math.min(budget.maxFileBytes, keeperLimits.preview.maxFileBytes),
+            maxBytes: managedFileBytes,
             maxLines: Math.min(limits.pack.maxRecords, limits.scan.maxEvidence)
           });
         } catch (error2) {
@@ -13059,7 +13107,9 @@ var expiredPersistedChangesetV1Schema = external_exports.object({
   });
 });
 var persistedChangesetSchema = external_exports.object({
-  version: external_exports.literal(2),
+  version: external_exports.union([external_exports.literal(2), external_exports.literal(3)]),
+  policy: external_exports.object({ revision: external_exports.string().min(1).max(128), easyMode: external_exports.boolean(), maxUpdateMiB: external_exports.number().int().min(1).max(64) }).strict().optional(),
+  diff: external_exports.string().optional(),
   changesetId: canonicalUuidSchema,
   root: external_exports.string().min(1),
   createdAt: external_exports.number().finite().int().nonnegative(),
@@ -13079,6 +13129,9 @@ var persistedChangesetSchema = external_exports.object({
   validatedPack: canonicalPackSchema.optional(),
   validationDependencyDigest: diffDigestSchema.optional()
 }).strict().superRefine((changeset, context) => {
+  if (changeset.version === 3 && (!changeset.policy || changeset.diff === void 0)) {
+    context.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["policy"], message: "version three requires authenticated runtime policy and full diff" });
+  }
   if (changeset.sourceScope.root !== changeset.root) {
     context.addIssue({ code: external_exports.ZodIssueCode.custom, path: ["sourceScope", "root"], message: "must equal the changeset root" });
   }
@@ -16618,13 +16671,13 @@ async function loadOrCreateCursorKey(layout) {
   return created;
 }
 function hmacCursorCodec(key) {
-  const mac = (body) => createHmac("sha256", key).update(body, "ascii").digest();
+  const mac = (body2) => createHmac("sha256", key).update(body2, "ascii").digest();
   return {
     encode(payload) {
-      const json = canonicalJson(payload);
-      if (Buffer2.byteLength(json, "utf8") > cursorBodyBytes) throw malformedCursor();
-      const body = Buffer2.from(json, "utf8").toString("base64url");
-      const token = `${body}.${mac(body).toString("base64url")}`;
+      const json2 = canonicalJson(payload);
+      if (Buffer2.byteLength(json2, "utf8") > cursorBodyBytes) throw malformedCursor();
+      const body2 = Buffer2.from(json2, "utf8").toString("base64url");
+      const token = `${body2}.${mac(body2).toString("base64url")}`;
       if (Buffer2.byteLength(token, "utf8") > cursorTokenBytes) throw malformedCursor();
       return token;
     },
@@ -16633,16 +16686,16 @@ function hmacCursorCodec(key) {
         if (typeof token !== "string" || Buffer2.byteLength(token, "utf8") > cursorTokenBytes) throw malformedCursor();
         const parts = token.split(".");
         if (parts.length !== 2) throw malformedCursor();
-        const [body, encodedMac] = parts;
+        const [body2, encodedMac] = parts;
         if (encodedMac.length !== encodedHmacBytes) throw malformedCursor();
         const supplied = decodeBase64Url(encodedMac, hmacBytes);
         if (supplied.byteLength !== hmacBytes) throw malformedCursor();
-        const expected = mac(body);
+        const expected = mac(body2);
         if (!timingSafeEqual(supplied, expected)) throw malformedCursor();
-        const bodyBytes = decodeBase64Url(body, cursorBodyBytes);
-        const json = bodyBytes.toString("utf8");
-        const value = JSON.parse(json);
-        if (canonicalJson(value) !== json) throw malformedCursor();
+        const bodyBytes = decodeBase64Url(body2, cursorBodyBytes);
+        const json2 = bodyBytes.toString("utf8");
+        const value = JSON.parse(json2);
+        if (canonicalJson(value) !== json2) throw malformedCursor();
         return parse4(value);
       } catch {
         throw malformedCursor();
@@ -17566,19 +17619,19 @@ async function writeBuildShard(layout, path, contents, hooks) {
 }
 var scopeAccessKeyBytes = 32;
 var maximumAccessRecordBytes = 4096;
-function accessBodyJson(body) {
+function accessBodyJson(body2) {
   return JSON.stringify({
-    version: body.version,
-    projectKey: body.projectKey,
-    cursorScopeKey: body.cursorScopeKey,
-    snapshotId: body.snapshotId,
-    createdAt: body.createdAt,
-    expiresAt: body.expiresAt,
-    accessedAt: body.accessedAt
+    version: body2.version,
+    projectKey: body2.projectKey,
+    cursorScopeKey: body2.cursorScopeKey,
+    snapshotId: body2.snapshotId,
+    createdAt: body2.createdAt,
+    expiresAt: body2.expiresAt,
+    accessedAt: body2.accessedAt
   });
 }
-function accessMac(key, body) {
-  return createHmac2("sha256", key).update(accessBodyJson(body), "utf8").digest("hex");
+function accessMac(key, body2) {
+  return createHmac2("sha256", key).update(accessBodyJson(body2), "utf8").digest("hex");
 }
 async function loadOrCreateAccessKey(layout) {
   const path = join3(layout.root, "scope-index-hmac.key");
@@ -17665,7 +17718,7 @@ async function readAccessFile(layout, path, metadata, key, hooks = nodeScopeStor
   if (metadata && (object3.projectKey !== metadata.projectKey || object3.cursorScopeKey !== metadata.cursorScopeKey || object3.snapshotId !== metadata.snapshotId || object3.createdAt !== metadata.createdAt || object3.expiresAt !== metadata.expiresAt)) {
     throw new Error("Scope access registry record binding is invalid");
   }
-  const body = {
+  const body2 = {
     version: 1,
     projectKey: object3.projectKey,
     cursorScopeKey: object3.cursorScopeKey,
@@ -17674,12 +17727,12 @@ async function readAccessFile(layout, path, metadata, key, hooks = nodeScopeStor
     expiresAt: Number(object3.expiresAt),
     accessedAt: Number(object3.accessedAt)
   };
-  const expected = Buffer.from(accessMac(key, body), "hex");
+  const expected = Buffer.from(accessMac(key, body2), "hex");
   const supplied = Buffer.from(object3.hmac, "hex");
   if (supplied.byteLength !== expected.byteLength || !timingSafeEqual2(supplied, expected)) {
     throw new Error("Scope access registry record authentication failed");
   }
-  return { record: { ...body, hmac: object3.hmac }, identity: file.identity, physicalBytes: file.bytes.byteLength };
+  return { record: { ...body2, hmac: object3.hmac }, identity: file.identity, physicalBytes: file.bytes.byteLength };
 }
 function samePhysicalFile(left, right) {
   return BigInt(left.dev) === BigInt(right.dev) && BigInt(left.ino) === BigInt(right.ino);
@@ -17758,7 +17811,7 @@ async function writeAccessRecordUnderPruneLock(layout, metadata, accessedAt, req
   const pendingPath = pendingAccessPath(layout, metadata);
   await createSecureCacheDirectory(layout, dirname3(path));
   const accessRecord = (time3) => {
-    const body = {
+    const body2 = {
       version: 1,
       projectKey: metadata.projectKey,
       cursorScopeKey: metadata.cursorScopeKey,
@@ -17767,7 +17820,7 @@ async function writeAccessRecordUnderPruneLock(layout, metadata, accessedAt, req
       expiresAt: metadata.expiresAt,
       accessedAt: time3
     };
-    return { ...body, hmac: accessMac(key, body) };
+    return { ...body2, hmac: accessMac(key, body2) };
   };
   const reserveAccessPublication = async (record3) => {
     if (!reserveUpdatePeak) return;
@@ -19697,8 +19750,9 @@ async function readBoundedRepositoryMetadata(lexicalPath, allowedRoot, options, 
   const size = Number(initial.size);
   if (!Number.isSafeInteger(size) || size < 0) throw new Error("Scope metadata file has an invalid byte length");
   budget.repositoryFiles.consume();
-  if (size > budget.maxFileBytes) {
-    throw new Error(`Scope metadata file bytes exceed the per-file limit of ${budget.maxFileBytes}`);
+  const maxFileBytes = Math.min(managedReadLimits.maxFileBytes, options.limits?.scan?.maxFileBytes ?? Infinity);
+  if (size > maxFileBytes) {
+    throw new Error(`Scope metadata file bytes exceed the per-file limit of ${maxFileBytes}`);
   }
   budget.repositoryBytes.consume(size);
   await runBeforeRepositoryContentHook(options, lexicalPath, budget);
@@ -19783,10 +19837,17 @@ async function safeDocumentRoute(root, packRoot, document, options, budget) {
   if (!bytes) return void 0;
   try {
     const markdown = decodeFatalUtf8(bytes);
-    const expression = /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->([\s\S]*?)<!-- \/project-design-keeper:managed -->/gu;
-    const recordIds = new Set([...markdown.matchAll(expression)].flatMap(
-      (match) => sha256(Buffer.from(match[3], "utf8")) === match[2] ? [match[1]] : []
-    ));
+    const expression = /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->/gu;
+    const close = "<!-- /project-design-keeper:managed -->";
+    const recordIds = /* @__PURE__ */ new Set();
+    for (let match = expression.exec(markdown); match; match = expression.exec(markdown)) {
+      const start = expression.lastIndex;
+      const end = markdown.indexOf(close, start);
+      if (end < 0) break;
+      budget.deadline.check();
+      if (sha256(Buffer.from(markdown.slice(start, end), "utf8")) === match[2]) recordIds.add(match[1]);
+      expression.lastIndex = end + close.length;
+    }
     return { document, recordIds };
   } catch {
     return void 0;
@@ -23462,24 +23523,24 @@ var JSONSchemaGenerator = class {
         const _json = result.schema;
         switch (def.type) {
           case "string": {
-            const json = _json;
-            json.type = "string";
+            const json2 = _json;
+            json2.type = "string";
             const { minimum, maximum, format, patterns, contentEncoding } = schema._zod.bag;
             if (typeof minimum === "number")
-              json.minLength = minimum;
+              json2.minLength = minimum;
             if (typeof maximum === "number")
-              json.maxLength = maximum;
+              json2.maxLength = maximum;
             if (format) {
-              json.format = formatMap[format] ?? format;
-              if (json.format === "")
-                delete json.format;
+              json2.format = formatMap[format] ?? format;
+              if (json2.format === "")
+                delete json2.format;
             }
             if (contentEncoding)
-              json.contentEncoding = contentEncoding;
+              json2.contentEncoding = contentEncoding;
             if (patterns && patterns.size > 0) {
               const regexes = [...patterns];
               if (regexes.length === 1)
-                json.pattern = regexes[0].source;
+                json2.pattern = regexes[0].source;
               else if (regexes.length > 1) {
                 result.schema.allOf = [
                   ...regexes.map((regex) => ({
@@ -23492,41 +23553,41 @@ var JSONSchemaGenerator = class {
             break;
           }
           case "number": {
-            const json = _json;
+            const json2 = _json;
             const { minimum, maximum, format, multipleOf, exclusiveMaximum, exclusiveMinimum } = schema._zod.bag;
             if (typeof format === "string" && format.includes("int"))
-              json.type = "integer";
+              json2.type = "integer";
             else
-              json.type = "number";
+              json2.type = "number";
             if (typeof exclusiveMinimum === "number")
-              json.exclusiveMinimum = exclusiveMinimum;
+              json2.exclusiveMinimum = exclusiveMinimum;
             if (typeof minimum === "number") {
-              json.minimum = minimum;
+              json2.minimum = minimum;
               if (typeof exclusiveMinimum === "number") {
                 if (exclusiveMinimum >= minimum)
-                  delete json.minimum;
+                  delete json2.minimum;
                 else
-                  delete json.exclusiveMinimum;
+                  delete json2.exclusiveMinimum;
               }
             }
             if (typeof exclusiveMaximum === "number")
-              json.exclusiveMaximum = exclusiveMaximum;
+              json2.exclusiveMaximum = exclusiveMaximum;
             if (typeof maximum === "number") {
-              json.maximum = maximum;
+              json2.maximum = maximum;
               if (typeof exclusiveMaximum === "number") {
                 if (exclusiveMaximum <= maximum)
-                  delete json.maximum;
+                  delete json2.maximum;
                 else
-                  delete json.exclusiveMaximum;
+                  delete json2.exclusiveMaximum;
               }
             }
             if (typeof multipleOf === "number")
-              json.multipleOf = multipleOf;
+              json2.multipleOf = multipleOf;
             break;
           }
           case "boolean": {
-            const json = _json;
-            json.type = "boolean";
+            const json2 = _json;
+            json2.type = "boolean";
             break;
           }
           case "bigint": {
@@ -23574,23 +23635,23 @@ var JSONSchemaGenerator = class {
             break;
           }
           case "array": {
-            const json = _json;
+            const json2 = _json;
             const { minimum, maximum } = schema._zod.bag;
             if (typeof minimum === "number")
-              json.minItems = minimum;
+              json2.minItems = minimum;
             if (typeof maximum === "number")
-              json.maxItems = maximum;
-            json.type = "array";
-            json.items = this.process(def.element, { ...params, path: [...params.path, "items"] });
+              json2.maxItems = maximum;
+            json2.type = "array";
+            json2.items = this.process(def.element, { ...params, path: [...params.path, "items"] });
             break;
           }
           case "object": {
-            const json = _json;
-            json.type = "object";
-            json.properties = {};
+            const json2 = _json;
+            json2.type = "object";
+            json2.properties = {};
             const shape = def.shape;
             for (const key in shape) {
-              json.properties[key] = this.process(shape[key], {
+              json2.properties[key] = this.process(shape[key], {
                 ...params,
                 path: [...params.path, "properties", key]
               });
@@ -23605,15 +23666,15 @@ var JSONSchemaGenerator = class {
               }
             }));
             if (requiredKeys.size > 0) {
-              json.required = Array.from(requiredKeys);
+              json2.required = Array.from(requiredKeys);
             }
             if (def.catchall?._zod.def.type === "never") {
-              json.additionalProperties = false;
+              json2.additionalProperties = false;
             } else if (!def.catchall) {
               if (this.io === "output")
-                json.additionalProperties = false;
+                json2.additionalProperties = false;
             } else if (def.catchall) {
-              json.additionalProperties = this.process(def.catchall, {
+              json2.additionalProperties = this.process(def.catchall, {
                 ...params,
                 path: [...params.path, "additionalProperties"]
               });
@@ -23621,15 +23682,15 @@ var JSONSchemaGenerator = class {
             break;
           }
           case "union": {
-            const json = _json;
-            json.anyOf = def.options.map((x, i) => this.process(x, {
+            const json2 = _json;
+            json2.anyOf = def.options.map((x, i) => this.process(x, {
               ...params,
               path: [...params.path, "anyOf", i]
             }));
             break;
           }
           case "intersection": {
-            const json = _json;
+            const json2 = _json;
             const a = this.process(def.left, {
               ...params,
               path: [...params.path, "allOf", 0]
@@ -23643,17 +23704,17 @@ var JSONSchemaGenerator = class {
               ...isSimpleIntersection(a) ? a.allOf : [a],
               ...isSimpleIntersection(b) ? b.allOf : [b]
             ];
-            json.allOf = allOf;
+            json2.allOf = allOf;
             break;
           }
           case "tuple": {
-            const json = _json;
-            json.type = "array";
+            const json2 = _json;
+            json2.type = "array";
             const prefixItems = def.items.map((x, i) => this.process(x, { ...params, path: [...params.path, "prefixItems", i] }));
             if (this.target === "draft-2020-12") {
-              json.prefixItems = prefixItems;
+              json2.prefixItems = prefixItems;
             } else {
-              json.items = prefixItems;
+              json2.items = prefixItems;
             }
             if (def.rest) {
               const rest = this.process(def.rest, {
@@ -23661,29 +23722,29 @@ var JSONSchemaGenerator = class {
                 path: [...params.path, "items"]
               });
               if (this.target === "draft-2020-12") {
-                json.items = rest;
+                json2.items = rest;
               } else {
-                json.additionalItems = rest;
+                json2.additionalItems = rest;
               }
             }
             if (def.rest) {
-              json.items = this.process(def.rest, {
+              json2.items = this.process(def.rest, {
                 ...params,
                 path: [...params.path, "items"]
               });
             }
             const { minimum, maximum } = schema._zod.bag;
             if (typeof minimum === "number")
-              json.minItems = minimum;
+              json2.minItems = minimum;
             if (typeof maximum === "number")
-              json.maxItems = maximum;
+              json2.maxItems = maximum;
             break;
           }
           case "record": {
-            const json = _json;
-            json.type = "object";
-            json.propertyNames = this.process(def.keyType, { ...params, path: [...params.path, "propertyNames"] });
-            json.additionalProperties = this.process(def.valueType, {
+            const json2 = _json;
+            json2.type = "object";
+            json2.propertyNames = this.process(def.keyType, { ...params, path: [...params.path, "propertyNames"] });
+            json2.additionalProperties = this.process(def.valueType, {
               ...params,
               path: [...params.path, "additionalProperties"]
             });
@@ -23702,17 +23763,17 @@ var JSONSchemaGenerator = class {
             break;
           }
           case "enum": {
-            const json = _json;
+            const json2 = _json;
             const values = getEnumValues(def.entries);
             if (values.every((v) => typeof v === "number"))
-              json.type = "number";
+              json2.type = "number";
             if (values.every((v) => typeof v === "string"))
-              json.type = "string";
-            json.enum = values;
+              json2.type = "string";
+            json2.enum = values;
             break;
           }
           case "literal": {
-            const json = _json;
+            const json2 = _json;
             const vals = [];
             for (const val of def.values) {
               if (val === void 0) {
@@ -23733,23 +23794,23 @@ var JSONSchemaGenerator = class {
             if (vals.length === 0) {
             } else if (vals.length === 1) {
               const val = vals[0];
-              json.type = val === null ? "null" : typeof val;
-              json.const = val;
+              json2.type = val === null ? "null" : typeof val;
+              json2.const = val;
             } else {
               if (vals.every((v) => typeof v === "number"))
-                json.type = "number";
+                json2.type = "number";
               if (vals.every((v) => typeof v === "string"))
-                json.type = "string";
+                json2.type = "string";
               if (vals.every((v) => typeof v === "boolean"))
-                json.type = "string";
+                json2.type = "string";
               if (vals.every((v) => v === null))
-                json.type = "null";
-              json.enum = vals;
+                json2.type = "null";
+              json2.enum = vals;
             }
             break;
           }
           case "file": {
-            const json = _json;
+            const json2 = _json;
             const file = {
               type: "string",
               format: "binary",
@@ -23763,15 +23824,15 @@ var JSONSchemaGenerator = class {
             if (mime) {
               if (mime.length === 1) {
                 file.contentMediaType = mime[0];
-                Object.assign(json, file);
+                Object.assign(json2, file);
               } else {
-                json.anyOf = mime.map((m) => {
+                json2.anyOf = mime.map((m) => {
                   const mFile = { ...file, contentMediaType: m };
                   return mFile;
                 });
               }
             } else {
-              Object.assign(json, file);
+              Object.assign(json2, file);
             }
             break;
           }
@@ -23792,8 +23853,8 @@ var JSONSchemaGenerator = class {
             break;
           }
           case "success": {
-            const json = _json;
-            json.type = "boolean";
+            const json2 = _json;
+            json2.type = "boolean";
             break;
           }
           case "default": {
@@ -23828,12 +23889,12 @@ var JSONSchemaGenerator = class {
             break;
           }
           case "template_literal": {
-            const json = _json;
+            const json2 = _json;
             const pattern = schema._zod.pattern;
             if (!pattern)
               throw new Error("Pattern not found in template literal");
-            json.type = "string";
-            json.pattern = pattern.source;
+            json2.type = "string";
+            json2.pattern = pattern.source;
             break;
           }
           case "pipe": {
@@ -30557,8 +30618,8 @@ var StdioServerTransport = class {
   }
   send(message) {
     return new Promise((resolve10) => {
-      const json = serializeMessage(message);
-      if (this._stdout.write(json)) {
+      const json2 = serializeMessage(message);
+      if (this._stdout.write(json2)) {
         resolve10();
       } else {
         this._stdout.once("drain", resolve10);
@@ -30568,7 +30629,7 @@ var StdioServerTransport = class {
 };
 
 // src/mcp.ts
-var serverInstructions = "Safe sequence: scan/search -> preview -> show diff/conflicts -> obtain explicit user confirmation -> apply the unexpired change-set. Never treat preview as approval. Use query_context to load only task-relevant design context, detect_drift before refreshes, and validate_pack before presenting completion.";
+var serverInstructions = "Read get_settings for current policy. Safe sequence: scan/search -> preview -> inspect diff/conflicts (read_preview pages when incomplete) -> apply the unexpired change-set. Normal mode requires explicit user confirmation. Saved Easy mode skips Keeper human confirmation only; all automatic validation still applies. Never enable Easy to work around errors. Use open_settings only when the user requests settings. Use query_context for relevant context, detect_drift before refreshes, and validate_pack before completion.";
 function boundedString(maxBytes, minimum = 0) {
   return external_exports.string().min(minimum).max(maxBytes).superRefine((value, context) => {
     try {
@@ -30581,7 +30642,7 @@ function boundedString(maxBytes, minimum = 0) {
 var nonemptyString = boundedString(4 * 1024, 1);
 var nonemptyQuery = boundedString(32 * 1024, 1);
 var queryString = boundedString(32 * 1024);
-var proposedFileContent = boundedString(keeperLimits.preview.maxFileBytes);
+var proposedFileContent = boundedString(64 * 1024 * 1024);
 var fingerprint = external_exports.string().regex(/^sha256:[a-f0-9]{64}$/u);
 var fingerprintRecord = external_exports.record(fingerprint);
 var snapshotInput = external_exports.union([
@@ -30734,18 +30795,27 @@ function requireApplyChangeset(input) {
   const adapter = input.changeset;
   if (!input.changesetId && !adapter?.changesetId) throw new Error("A changeset id is required");
 }
-function previewOperation(operation) {
+function previewOperation(service) {
   return async (input) => {
+    const settings = await service.getSettings?.();
+    assertSerializedWithin("MCP arguments", input, resolveKeeperLimits({}, settings).mcpArgumentBytes);
     const changes = input.changes;
     const totalBytes = changes.reduce((total, change) => {
       if (typeof change.content === "string") return total + Buffer.byteLength(change.content, "utf8");
       const managedBlock2 = change.managedBlock;
       return total + (typeof managedBlock2?.content === "string" ? Buffer.byteLength(managedBlock2.content, "utf8") : 0);
     }, 0);
-    if (totalBytes > keeperLimits.preview.maxAggregateBytes) {
-      throw new Error(`Proposed file content exceeds the aggregate limit of ${keeperLimits.preview.maxAggregateBytes} bytes`);
+    const aggregateLimit = (settings?.maxUpdateMiB ?? 8) * 1024 * 1024;
+    const fileLimit = settings?.easyMode ? aggregateLimit : keeperLimits.preview.maxFileBytes;
+    for (const change of changes) {
+      const block = change.managedBlock;
+      const content = change.content ?? block?.content;
+      if (typeof content === "string") assertStringWithin("Proposed file content", content, fileLimit);
     }
-    return operation(input);
+    if (totalBytes > aggregateLimit) {
+      throw new Error(`Proposed file content exceeds the aggregate limit of ${aggregateLimit} bytes`);
+    }
+    return packOperation(service.previewUpdate)(input);
   };
 }
 function assertOptionalPackArrayWithin(label, value, maxItems) {
@@ -30795,7 +30865,7 @@ function toolError(error2) {
 function registerTool(server, name, description, inputSchema, annotations, operation) {
   server.registerTool(name, { description, inputSchema, annotations }, async (input) => {
     try {
-      assertSerializedWithin("MCP arguments", input, 8 * 1024 * 1024);
+      if (name !== "preview_update" && name !== "validate_pack") assertSerializedWithin("MCP arguments", input, 8 * 1024 * 1024);
       return toolResult(await operation(input));
     } catch (error2) {
       return toolError(error2);
@@ -30845,7 +30915,7 @@ function validateElicitationApproval(result, expectedSuffix) {
 }
 function registerApplyTool(server, service) {
   server.registerTool("apply_update", {
-    description: "Apply one explicitly confirmed, unexpired change-set with optimistic concurrency and recovery snapshots.",
+    description: "Apply one unexpired change-set under its saved policy: human confirmation in normal mode, automatic authorization in Easy mode. All validation and recovery checks remain.",
     inputSchema: applyInput,
     annotations: applyAnnotations
   }, async (input, extra) => {
@@ -30853,41 +30923,44 @@ function registerApplyTool(server, service) {
       assertSerializedWithin("MCP arguments", input, 8 * 1024 * 1024);
       const applyInputValue = input;
       requireApplyChangeset(applyInputValue);
-      if (server.server.getClientCapabilities()?.elicitation?.form === void 0) {
-        throw new Error("The connected client must support form elicitation for apply approval");
-      }
       const binding = await service.inspectChangesetForApproval(applyInputValue);
       const requestIdentity = approvalRequestIdentity(extra);
-      const message = approvalMessage(binding);
-      const result = await server.server.elicitInput({
-        mode: "form",
-        message,
-        requestedSchema: {
-          type: "object",
-          properties: {
-            decision: {
-              type: "string",
-              enum: ["approve"],
-              title: "Approve changeset",
-              description: "Select approve only after reviewing the full preview_update diff."
-            },
-            confirmation: {
-              type: "string",
-              minLength: 8,
-              maxLength: 8,
-              title: `Confirmation code: ${binding.diffDigest.slice(-8)}`,
-              description: "Type the eight hexadecimal characters shown above to confirm this changeset."
-            }
-          },
-          required: ["decision", "confirmation"]
+      if (!binding.policy?.easyMode) {
+        if (server.server.getClientCapabilities()?.elicitation?.form === void 0) {
+          throw new Error("The connected client must support form elicitation for apply approval");
         }
-      }, {
-        signal: extra.signal,
-        relatedRequestId: extra.requestId,
-        timeout: 6e4
-      });
+        const message = approvalMessage(binding);
+        const result = await server.server.elicitInput({
+          mode: "form",
+          message,
+          requestedSchema: {
+            type: "object",
+            properties: {
+              decision: {
+                type: "string",
+                enum: ["approve"],
+                title: "Approve changeset",
+                description: "Select approve only after reviewing the full preview_update diff."
+              },
+              confirmation: {
+                type: "string",
+                minLength: 8,
+                maxLength: 8,
+                title: `Confirmation code: ${binding.diffDigest.slice(-8)}`,
+                description: "Type the eight hexadecimal characters shown above to confirm this changeset."
+              }
+            },
+            required: ["decision", "confirmation"]
+          }
+        }, {
+          signal: extra.signal,
+          relatedRequestId: extra.requestId,
+          timeout: 6e4
+        });
+        extra.signal.throwIfAborted();
+        validateElicitationApproval(result, binding.diffDigest.slice(-8));
+      }
       extra.signal.throwIfAborted();
-      validateElicitationApproval(result, binding.diffDigest.slice(-8));
       const authorization = service.issueApplyAuthorization(binding, requestIdentity);
       return toolResult(await service.applyUpdate(
         applyInputValue,
@@ -30901,7 +30974,7 @@ function registerApplyTool(server, service) {
 }
 function createMcpServer(service) {
   const server = new McpServer(
-    { name: "project-design-keeper", version: "1.0.3" },
+    { name: "project-design-keeper", version: "1.1.0" },
     { instructions: serverInstructions }
   );
   registerTool(server, "scan_scope", "Scan a repository scope and return a bounded summary or cursor-paged files/evidence for an immutable snapshot.", scanInput, readOnlyAnnotations, scopedOperation(service.scanScope));
@@ -30910,9 +30983,29 @@ function createMcpServer(service) {
   registerTool(server, "query_context", "Return the smallest relevant design context for a task, path, or module.", contextInput, readOnlyAnnotations, scopedOperation(service.queryContext));
   registerTool(server, "query_history", "Query stale, terminal, archived, and optionally tombstoned project-design knowledge.", historyInput, readOnlyAnnotations, service.queryHistory);
   registerTool(server, "analyze_redundancy", "Find deterministic semantic-redundancy candidates for explicit Agent and user decisions.", redundancyInput, readOnlyAnnotations, service.analyzeRedundancy);
-  registerTool(server, "preview_update", "Validate a proposed managed update, store an expiring change-set in keeper cache, and return its diff and conflicts without changing the project.", previewInput, previewAnnotations, previewOperation(packOperation(service.previewUpdate)));
+  registerTool(server, "preview_update", "Validate a proposed managed update, store an expiring change-set in keeper cache, and return its diff and conflicts without changing the project. Read remaining diff pages with read_preview when incomplete.", previewInput, previewAnnotations, previewOperation(service));
   registerApplyTool(server, service);
-  registerTool(server, "validate_pack", "Validate a project-design knowledge pack, links, records, evidence, and ownership metadata.", validateInput, readOnlyAnnotations, packOperation(service.validatePack));
+  registerTool(server, "validate_pack", "Validate a project-design knowledge pack, links, records, evidence, and ownership metadata.", validateInput, readOnlyAnnotations, async (input) => {
+    assertSerializedWithin("MCP arguments", input, resolveKeeperLimits({}, await service.getSettings?.()).mcpArgumentBytes);
+    return packOperation(service.validatePack)(input);
+  });
+  registerTool(server, "get_settings", "Read the saved Keeper mode, aggregate update limit and settings revision. Does not change settings.", external_exports.object({}).strict(), readOnlyAnnotations, async () => {
+    if (!service.getSettings) throw new Error("Settings are unavailable in this service");
+    return service.getSettings();
+  });
+  registerTool(server, "open_settings", "Open the clickable local Keeper settings panel when the user requests settings. The user saves changes in their browser; never change settings to bypass errors.", external_exports.object({}).strict(), previewAnnotations, async () => {
+    if (!service.openSettings) throw new Error("Settings panel is unavailable in this service");
+    return service.openSettings();
+  });
+  registerTool(server, "read_preview", "Read the complete authenticated diff in bounded pages. Continue nextCursor until complete before normal-mode approval.", external_exports.object({ root: nonemptyString, changesetId: nonemptyString, cursor: nonemptyString.optional() }).strict(), readOnlyAnnotations, async (input) => {
+    if (!service.readPreview) throw new Error("Preview pagination is unavailable in this service");
+    return service.readPreview(input);
+  });
+  const originalClose = server.close.bind(server);
+  server.close = async () => {
+    await service.closeSettings?.();
+    await originalClose();
+  };
   return server;
 }
 async function connectStdioServer(service) {
@@ -32339,14 +32432,16 @@ async function readBoundedRepositoryFile(root, repositoryPath3, budget, label, c
     await handle.close();
   }
 }
-async function manifest(rootInput, budget) {
+async function manifest(rootInput, budget, maxFileBytes = managedReadLimits.maxFileBytes) {
   checkReadDeadline(budget);
   const root = await realpath6(resolve6(rootInput));
   checkReadDeadline(budget);
   const result = await readBoundedRepositoryFile(
     root,
     "docs/project-design/manifest.json",
-    budget,
+    // Manifest knowledge can be larger than source evidence. Only its per-file
+    // allowance changes; count, aggregate and deadline remain shared and bounded.
+    { ...budget, maxFileBytes },
     "The Keeper manifest",
     true
   );
@@ -32454,24 +32549,24 @@ function signature(payload) {
   return createHmac3("sha256", analysisSigningKey).update(payload, "utf8").digest();
 }
 function encodeAnalysis(payload) {
-  const body = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  return `${body}.${signature(body).toString("base64url")}`;
+  const body2 = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  return `${body2}.${signature(body2).toString("base64url")}`;
 }
 function decodeAnalysis(analysisId) {
-  const [body, encodedSignature, ...extra] = analysisId.split(".");
-  if (!body || !encodedSignature || extra.length > 0) throw new Error("Redundancy analysis ID is malformed or tampered");
+  const [body2, encodedSignature, ...extra] = analysisId.split(".");
+  if (!body2 || !encodedSignature || extra.length > 0) throw new Error("Redundancy analysis ID is malformed or tampered");
   let supplied;
   try {
     supplied = Buffer.from(encodedSignature, "base64url");
   } catch {
     throw new Error("Redundancy analysis ID is malformed or tampered");
   }
-  const expected = signature(body);
+  const expected = signature(body2);
   if (supplied.length !== expected.length || !timingSafeEqual3(supplied, expected)) {
     throw new Error("Redundancy analysis ID is malformed or tampered");
   }
   try {
-    const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+    const payload = JSON.parse(Buffer.from(body2, "base64url").toString("utf8"));
     if (payload.version !== 1 || typeof payload.root !== "string" || typeof payload.snapshotId !== "string" || !Number.isSafeInteger(payload.createdAt) || !Number.isSafeInteger(payload.expiresAt) || !Array.isArray(payload.candidates)) {
       throw new Error("invalid payload");
     }
@@ -32641,7 +32736,7 @@ async function analyzeRedundancy(input, options = {}) {
   if (typeof input.root !== "string") throw new Error("A repository root is required");
   const resolvedLimits = resolveKeeperLimits(options.limits);
   const budget = readBudget(resolvedLimits, options.redundancyIo);
-  const loaded = await manifest(input.root, budget);
+  const loaded = await manifest(input.root, budget, Math.min(managedReadLimits.maxFileBytes, options.limits?.scan?.maxFileBytes ?? Infinity));
   const limits = resolvedLimits.redundancy;
   const rawRecords = Array.isArray(loaded.value.records) ? loaded.value.records : [];
   if (rawRecords.length > limits.maxRecords) {
@@ -32879,9 +32974,13 @@ function equalJson(left, right) {
 }
 function managedBody(contents, recordId) {
   if (!contents) return void 0;
-  const escaped = recordId.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const match = new RegExp(`<!-- project-design-keeper:managed record-id="${escaped}" content-hash="sha256:[a-f0-9]{64}" -->([\\s\\S]*?)<!-- \\/project-design-keeper:managed -->`, "u").exec(contents.toString("utf8"));
-  return match?.[1];
+  const escaped2 = recordId.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const text = contents.toString("utf8");
+  const match = new RegExp(`<!-- project-design-keeper:managed record-id="${escaped2}" content-hash="sha256:[a-f0-9]{64}" -->`, "u").exec(text);
+  if (!match) return void 0;
+  const start = match.index + match[0].length;
+  const end = text.indexOf("<!-- /project-design-keeper:managed -->", start);
+  return end < 0 ? void 0 : text.slice(start, end);
 }
 async function validateArchiveTransition(input) {
   const { currentPack, candidatePack } = input;
@@ -33413,6 +33512,8 @@ async function loadAndValidateHistoryOverlay(value, read) {
 // src/security/approval.ts
 function snapshotBinding(binding) {
   return {
+    ...binding.policy ? { policy: { ...binding.policy } } : {},
+    ...binding.authorizationSource ? { authorizationSource: binding.authorizationSource } : {},
     root: binding.root,
     changesetId: binding.changesetId,
     diffDigest: binding.diffDigest,
@@ -33430,7 +33531,7 @@ function equalStrings(left, right) {
   return left.length === right.length && left.every((value, index2) => value === right[index2]);
 }
 function equalBindings(left, right) {
-  return left.root === right.root && left.changesetId === right.changesetId && left.diffDigest === right.diffDigest && left.expiresAt === right.expiresAt && equalStrings(left.paths, right.paths) && left.summary.create === right.summary.create && left.summary.update === right.summary.update && left.summary.delete === right.summary.delete && equalStrings(left.archiveActions.archivedRecordIds, right.archiveActions.archivedRecordIds) && equalStrings(left.archiveActions.tombstonedRecordIds, right.archiveActions.tombstonedRecordIds) && equalStrings(left.semanticDecisionIds, right.semanticDecisionIds);
+  return left.policy?.revision === right.policy?.revision && left.policy?.easyMode === right.policy?.easyMode && left.policy?.maxUpdateMiB === right.policy?.maxUpdateMiB && left.authorizationSource === right.authorizationSource && left.root === right.root && left.changesetId === right.changesetId && left.diffDigest === right.diffDigest && left.expiresAt === right.expiresAt && equalStrings(left.paths, right.paths) && left.summary.create === right.summary.create && left.summary.update === right.summary.update && left.summary.delete === right.summary.delete && equalStrings(left.archiveActions.archivedRecordIds, right.archiveActions.archivedRecordIds) && equalStrings(left.archiveActions.tombstonedRecordIds, right.archiveActions.tombstonedRecordIds) && equalStrings(left.semanticDecisionIds, right.semanticDecisionIds);
 }
 function createApplyApprovalAuthority(now) {
   const records = /* @__PURE__ */ new WeakMap();
@@ -33461,6 +33562,117 @@ function createApplyApprovalAuthority(now) {
 import { createHash as createHash8, createHmac as createHmac4, randomBytes as randomBytes6, timingSafeEqual as timingSafeEqual4 } from "node:crypto";
 import { lstat as lstat8, open as open8, opendir as opendir5 } from "node:fs/promises";
 import { join as join6 } from "node:path";
+
+// src/security/text-storage.ts
+import { gzipSync, gunzipSync } from "node:zlib";
+import { TextDecoder as TextDecoder5 } from "node:util";
+var marker = "$keeperCompressedText";
+var escaped = "$keeperLiteralObject";
+var threshold = 32 * 1024;
+var textStorageLimits = Object.freeze({ maxStringBytes: 384 * 1024 * 1024, maxExpandedBytes: 1024 * 1024 * 1024, maxNodes: 2e6, maxDepth: 64 });
+function encodeStoredText(value) {
+  let compressed = false;
+  let nodes = 0;
+  let expanded = 0;
+  const visit = (item, depth) => {
+    if (++nodes > textStorageLimits.maxNodes || depth > textStorageLimits.maxDepth) throw new Error("Stored text structure exceeds its bounded budget");
+    if (typeof item === "string") {
+      const bytes = Buffer.byteLength(item, "utf8");
+      expanded += bytes;
+      if (bytes > textStorageLimits.maxStringBytes || expanded > textStorageLimits.maxExpandedBytes) throw new Error("Stored text exceeds its expanded byte budget");
+      if (bytes <= threshold) return item;
+      compressed = true;
+      return { [marker]: { bytes, data: gzipSync(Buffer.from(item, "utf8")).toString("base64") } };
+    }
+    if (Array.isArray(item)) return item.map((child) => visit(child, depth + 1));
+    if (item && typeof item === "object") {
+      const entries = Object.entries(item).map(([key, child]) => [key, visit(child, depth + 1)]);
+      if (Object.hasOwn(item, marker) || Object.hasOwn(item, escaped)) return { [escaped]: entries };
+      return Object.fromEntries(entries);
+    }
+    return item;
+  };
+  const payload = visit(value, 0);
+  return compressed ? { textStorage: "keeper-text-v1", payload } : value;
+}
+function decodeStoredText(value, consumeExpandedBytes) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || !Object.hasOwn(value, "textStorage")) return value;
+  const envelope = value;
+  if (envelope.textStorage !== "keeper-text-v1" || Object.keys(envelope).length !== 2 || !Object.hasOwn(envelope, "payload")) throw new Error("Stored text envelope is invalid");
+  let expanded = 0;
+  let nodes = 0;
+  const charge = (bytes) => {
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > textStorageLimits.maxStringBytes || expanded + bytes > textStorageLimits.maxExpandedBytes) throw new Error("Stored text exceeds its expanded byte budget");
+    consumeExpandedBytes?.(bytes);
+    expanded += bytes;
+  };
+  const visit = (item, depth) => {
+    if (++nodes > textStorageLimits.maxNodes || depth > textStorageLimits.maxDepth) throw new Error("Stored text structure exceeds its bounded budget");
+    if (typeof item === "string") {
+      charge(Buffer.byteLength(item, "utf8"));
+      return item;
+    }
+    if (Array.isArray(item)) return item.map((child) => visit(child, depth + 1));
+    if (item && typeof item === "object") {
+      const object3 = item;
+      if (Object.hasOwn(object3, marker)) {
+        const encoded = object3[marker];
+        if (Object.keys(object3).length !== 1 || !encoded || typeof encoded !== "object" || Array.isArray(encoded) || Object.keys(encoded).length !== 2 || typeof encoded.bytes !== "number" || typeof encoded.data !== "string") throw new Error("Compressed stored text is malformed");
+        charge(encoded.bytes);
+        const compressed = Buffer.from(encoded.data, "base64");
+        if (compressed.toString("base64") !== encoded.data) throw new Error("Compressed stored text encoding is invalid");
+        const output = gunzipSync(compressed, { maxOutputLength: Math.max(1, encoded.bytes) });
+        if (output.length !== encoded.bytes) throw new Error("Compressed stored text length does not match its binding");
+        return new TextDecoder5("utf-8", { fatal: true, ignoreBOM: true }).decode(output);
+      }
+      if (Object.hasOwn(object3, escaped)) {
+        const entries = object3[escaped];
+        if (Object.keys(object3).length !== 1 || !Array.isArray(entries) || entries.some((entry) => !Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string")) throw new Error("Escaped stored object is malformed");
+        return Object.fromEntries(entries.map(([key, child]) => [key, visit(child, depth + 1)]));
+      }
+      return Object.fromEntries(Object.entries(object3).map(([key, child]) => [key, visit(child, depth + 1)]));
+    }
+    return item;
+  };
+  return visit(envelope.payload, 0);
+}
+function* canonicalJsonChunks(value) {
+  if (typeof value === "string") {
+    yield '"';
+    for (let start = 0; start < value.length; ) {
+      let end = Math.min(value.length, start + 64 * 1024);
+      if (end < value.length && value.charCodeAt(end - 1) >= 55296 && value.charCodeAt(end - 1) <= 56319) end -= 1;
+      yield JSON.stringify(value.slice(start, end)).slice(1, -1);
+      start = end;
+    }
+    yield '"';
+  } else if (Array.isArray(value)) {
+    yield "[";
+    for (const [index2, child] of value.entries()) {
+      if (index2) yield ",";
+      yield* canonicalJsonChunks(child === void 0 ? null : child);
+    }
+    yield "]";
+  } else if (value && typeof value === "object") {
+    yield "{";
+    const normalized3 = Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b, "en-US")));
+    let index2 = 0;
+    for (const [key, child] of Object.entries(normalized3)) {
+      if (child === void 0) continue;
+      if (index2++) yield ",";
+      yield* canonicalJsonChunks(key);
+      yield ":";
+      yield* canonicalJsonChunks(child);
+    }
+    yield "}";
+  } else {
+    const encoded = JSON.stringify(value);
+    if (encoded === void 0) throw new Error("Value cannot be serialized as canonical JSON");
+    yield encoded;
+  }
+}
+
+// src/changesets/store.ts
 var uuidV4Pattern = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 var publicationTemporaryEntryPattern = new RegExp(`^\\.${uuidV4Pattern}\\.tmp$`, "u");
 var claimInitializationEntryPattern = new RegExp(`^\\.claim-${uuidV4Pattern}\\.tmp$`, "u");
@@ -33516,18 +33728,10 @@ function signaturePath(cache, changesetId) {
   if (!isCanonicalUuid(changesetId)) throw new Error("Invalid canonical changeset id");
   return join6(cache.changesets, `${changesetId}.sig.json`);
 }
-function canonicalJson2(value) {
-  const normalize = (candidate) => {
-    if (Array.isArray(candidate)) return candidate.map(normalize);
-    if (typeof candidate === "object" && candidate !== null) {
-      return Object.fromEntries(Object.entries(candidate).sort(([left], [right]) => left.localeCompare(right, "en-US")).map(([key, nested]) => [key, normalize(nested)]));
-    }
-    return candidate;
-  };
-  return JSON.stringify(normalize(value));
-}
-function persistedDiffDigest(changes, semanticDecisionIds2) {
-  return `sha256:${createHash8("sha256").update(canonicalJson2({ changes, semanticDecisionIds: semanticDecisionIds2 }), "utf8").digest("hex")}`;
+function persistedDiffDigest(changes, semanticDecisionIds2, policy, diff) {
+  const hash2 = createHash8("sha256");
+  for (const chunk of canonicalJsonChunks({ changes, semanticDecisionIds: semanticDecisionIds2, ...policy ? { policy, diff } : {} })) hash2.update(chunk, "utf8");
+  return `sha256:${hash2.digest("hex")}`;
 }
 function projectDigest(root) {
   const canonical2 = process.platform === "win32" ? root.toLocaleLowerCase("en-US") : root;
@@ -33537,7 +33741,9 @@ function bytesDigest(bytes) {
   return createHash8("sha256").update(bytes).digest("hex");
 }
 function changesetMac(key, value) {
-  return createHmac4("sha256", key).update(canonicalJson2(value), "utf8").digest("hex");
+  const mac = createHmac4("sha256", key);
+  for (const chunk of canonicalJsonChunks(value)) mac.update(chunk, "utf8");
+  return mac.digest("hex");
 }
 function parseJson(bytes, label) {
   try {
@@ -33668,7 +33874,7 @@ async function readAuthenticatedPair(cache, changesetId, changesetMetadata, sign
   if (actual.byteLength !== expected.byteLength || !timingSafeEqual4(actual, expected)) {
     throw new Error("Changeset signature authentication failed; cached data may have been tampered with");
   }
-  return { raw, changesetBytes, signatureBytes };
+  return { raw: decodeStoredText(raw), changesetBytes, signatureBytes };
 }
 function parseAuthenticatedVersionTwo(cache, changesetId, changesetMetadata, signatureMetadata, authenticated, options) {
   const { raw, changesetBytes, signatureBytes } = authenticated;
@@ -33681,7 +33887,7 @@ function parseAuthenticatedVersionTwo(cache, changesetId, changesetMetadata, sig
   if (options.expectedRoot !== void 0 && changeset.root !== options.expectedRoot) {
     throw new Error("Changeset root does not match the requested project root");
   }
-  if (persistedDiffDigest(changeset.changes, changeset.semanticDecisionIds) !== changeset.diffDigest) {
+  if (persistedDiffDigest(changeset.changes, changeset.semanticDecisionIds, changeset.policy, changeset.diff) !== changeset.diffDigest) {
     throw new Error("Persisted changeset diff digest does not match its authenticated changes");
   }
   return {
@@ -33733,7 +33939,7 @@ function quotaError(label, limit) {
 }
 function createChangesetStore(options = {}) {
   const now = options.now ?? (() => Date.now());
-  const limits = resolveKeeperLimits(options.limits);
+  const limits = resolveKeeperLimits(options.limits, options.runtimePolicy);
   const io = {
     publishFile: options.io?.publishFile ?? publishExclusiveFile,
     removeExactFile: options.io?.removeExactFile ?? safeRemoveExactCacheFile,
@@ -33947,11 +34153,12 @@ function createChangesetStore(options = {}) {
   }
   async function preparePublication(changeset) {
     const parsed = parsePersistedChangeset(changeset);
-    if (persistedDiffDigest(parsed.changes, parsed.semanticDecisionIds) !== parsed.diffDigest) {
+    if (persistedDiffDigest(parsed.changes, parsed.semanticDecisionIds, parsed.policy, parsed.diff) !== parsed.diffDigest) {
       throw new Error("Persisted changeset diff digest does not match its authenticated changes");
     }
     if (now() >= parsed.expiresAt) throw new Error(`Changeset ${parsed.changesetId} has expired`);
-    const changesetBytes = Buffer.from(`${JSON.stringify(parsed, null, 2)}
+    const wire = parsed.version === 3 ? encodeStoredText(parsed) : parsed;
+    const changesetBytes = Buffer.from(`${JSON.stringify(wire, null, 2)}
 `, "utf8");
     if (changesetBytes.byteLength > limits.changesets.maxChangesetBytes) {
       throw new Error(`Persisted changeset exceeds the limit of ${limits.changesets.maxChangesetBytes} bytes`);
@@ -33962,7 +34169,7 @@ function createChangesetStore(options = {}) {
       version: 1,
       algorithm: "hmac-sha256",
       changesetId: parsed.changesetId,
-      mac: changesetMac(key, parsed)
+      mac: changesetMac(key, wire)
     };
     const signatureBytes = Buffer.from(`${JSON.stringify(signature2, null, 2)}
 `, "utf8");
@@ -34297,27 +34504,36 @@ function escapedRegularExpression(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 function parseManagedDocument(contents) {
-  const expression = /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->([\s\S]*?)<!-- \/project-design-keeper:managed -->/gu;
-  const derivedExpression = /<!-- project-design-keeper:derived document-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->([\s\S]*?)<!-- \/project-design-keeper:derived -->/gu;
+  const expression = /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->/gu;
+  const derivedExpression = /<!-- project-design-keeper:derived document-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->/gu;
   const blockIds = /* @__PURE__ */ new Set();
   const derivedIds = /* @__PURE__ */ new Set();
   const spans = [];
   let match;
   while ((match = expression.exec(contents)) !== null) {
+    const bodyStart = expression.lastIndex;
+    const bodyEnd = contents.indexOf(managedClose, bodyStart);
+    if (bodyEnd < 0) break;
+    expression.lastIndex = bodyEnd + managedClose.length;
     if (blockIds.has(match[1])) return { valid: false, fullyOwned: false, blockIds, derivedIds, conflict: `Duplicate managed block: ${match[1]}` };
-    if (sha256(Buffer.from(match[3], "utf8")) !== match[2]) {
+    if (sha256(Buffer.from(contents.slice(bodyStart, bodyEnd), "utf8")) !== match[2]) {
       return { valid: false, fullyOwned: false, blockIds, derivedIds, conflict: `Managed block ${match[1]} content hash does not match its marker` };
     }
     blockIds.add(match[1]);
-    spans.push([match.index, match.index + match[0].length]);
+    spans.push([match.index, expression.lastIndex]);
   }
   while ((match = derivedExpression.exec(contents)) !== null) {
+    const derivedClose = "<!-- /project-design-keeper:derived -->";
+    const bodyStart = derivedExpression.lastIndex;
+    const bodyEnd = contents.indexOf(derivedClose, bodyStart);
+    if (bodyEnd < 0) break;
+    derivedExpression.lastIndex = bodyEnd + derivedClose.length;
     if (derivedIds.has(match[1])) return { valid: false, fullyOwned: false, blockIds, derivedIds, conflict: `Duplicate derived block: ${match[1]}` };
-    if (sha256(Buffer.from(match[3], "utf8")) !== match[2]) {
+    if (sha256(Buffer.from(contents.slice(bodyStart, bodyEnd), "utf8")) !== match[2]) {
       return { valid: false, fullyOwned: false, blockIds, derivedIds, conflict: `Derived block ${match[1]} content hash does not match its marker` };
     }
     derivedIds.add(match[1]);
-    spans.push([match.index, match.index + match[0].length]);
+    spans.push([match.index, derivedExpression.lastIndex]);
   }
   spans.sort((left, right) => left[0] - right[0]);
   let surrounding = "";
@@ -34376,8 +34592,8 @@ function keeperSkillOwnership(contents) {
   if (typeof description !== "string" || JSON.stringify(description) !== encodedDescription || description.length === 0 || description.length > 1024 || /[<>]/u.test(description) || !/^Use when\s+\S/iu.test(description) || /(?:follow these steps|step-by-step|rewrite the project files)/iu.test(description)) {
     return { owned: false, fullyOwned: false, conflict: "Keeper Skill description must be nonempty trigger semantics only" };
   }
-  const body = lines.slice(6).join("\n");
-  const parsedBody = parseManagedDocument(body);
+  const body2 = lines.slice(6).join("\n");
+  const parsedBody = parseManagedDocument(body2);
   if (!parsedBody.valid || !parsedBody.fullyOwned || parsedBody.derivedIds.size > 0) {
     return { owned: false, fullyOwned: false, conflict: parsedBody.conflict ?? "Keeper Skill body must contain only legal managed blocks" };
   }
@@ -34522,7 +34738,7 @@ async function migrationPreservationDiagnostics(root, currentPack, candidatePack
 function mergeManagedBlock(original, block, expectedHash) {
   const recordId = escapedRegularExpression(block.recordId);
   const expression = new RegExp(
-    `<!-- project-design-keeper:managed record-id="${recordId}" content-hash="(sha256:[a-f0-9]{64})" -->([\\s\\S]*?)${escapedRegularExpression(managedClose)}`,
+    `<!-- project-design-keeper:managed record-id="${recordId}" content-hash="(sha256:[a-f0-9]{64})" -->`,
     "u"
   );
   const parsed = parseManagedDocument(original);
@@ -34530,14 +34746,18 @@ function mergeManagedBlock(original, block, expectedHash) {
   const match = expression.exec(original);
   const opener = `<!-- project-design-keeper:managed record-id="${block.recordId}"`;
   if (match) {
-    const actual = sha256(Buffer.from(match[2], "utf8"));
+    const bodyStart = match.index + match[0].length;
+    const bodyEnd = original.indexOf(managedClose, bodyStart);
+    if (bodyEnd < 0) return { conflict: `Managed block ${block.recordId} has no closing marker` };
+    const blockEnd = bodyEnd + managedClose.length;
+    const actual = sha256(Buffer.from(original.slice(bodyStart, bodyEnd), "utf8"));
     if (actual !== match[1]) return { conflict: `Managed block ${block.recordId} content hash does not match its marker` };
     if (expectedHash && expectedHash !== actual) return { conflict: `Managed block ${block.recordId} differs from the expected content hash` };
     if ("delete" in block) {
-      return { content: `${original.slice(0, match.index)}${original.slice(match.index + match[0].length)}` };
+      return { content: `${original.slice(0, match.index)}${original.slice(blockEnd)}` };
     }
     const replacement2 = `${opener} content-hash="${sha256(Buffer.from(block.content, "utf8"))}" -->${block.content}${managedClose}`;
-    return { content: `${original.slice(0, match.index)}${replacement2}${original.slice(match.index + match[0].length)}` };
+    return { content: `${original.slice(0, match.index)}${replacement2}${original.slice(blockEnd)}` };
   }
   if ("delete" in block) return { conflict: `Managed block ${block.recordId} does not exist` };
   if (expectedHash) return { conflict: `Managed block ${block.recordId} does not exist for the expected content hash` };
@@ -34732,6 +34952,9 @@ async function deriveArchiveActions(currentPack, candidatePack, readCurrent, rea
   };
 }
 function approvalBinding(changeset) {
+  if (changeset.version !== 3 || !changeset.policy || changeset.diff === void 0) {
+    throw new Error("Changeset uses a legacy preview format; regenerate the preview update");
+  }
   if (changeset.sourcePaths && (!changeset.validatedPack || !changeset.validationDependencyDigest)) {
     throw new Error("Candidate changeset predates validation dependency binding; preview the update again");
   }
@@ -34742,6 +34965,8 @@ function approvalBinding(changeset) {
     else summary.create += 1;
   }
   return {
+    policy: { ...changeset.policy },
+    authorizationSource: changeset.policy.easyMode ? "easy-policy" : "human-form",
     root: changeset.root,
     changesetId: changeset.changesetId,
     diffDigest: changeset.diffDigest,
@@ -34756,8 +34981,12 @@ function approvalBinding(changeset) {
   };
 }
 async function persistJson(cache, path, value) {
-  await publishExclusiveFile(cache, path, `${JSON.stringify(value, null, 2)}
-`);
+  const serialized = `${JSON.stringify(encodeStoredText(value), null, 2)}
+`;
+  if (Buffer.byteLength(serialized, "utf8") > recoverySnapshotMaxBytes) {
+    throw new Error("Recovery snapshot exceeds its bounded serialized byte limit before publication");
+  }
+  await publishExclusiveFile(cache, path, serialized);
 }
 async function resolveChangesetRequest(input) {
   const adapter = typeof input.changeset === "object" && input.changeset !== null ? input.changeset : void 0;
@@ -34812,7 +35041,8 @@ function unifiedDiff(changes, originals) {
 }
 var canonicalUuidPattern2 = "[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 var recoverySnapshotNamePattern = new RegExp(`^(0|[1-9][0-9]*)-(${canonicalUuidPattern2})-(${canonicalUuidPattern2})\\.json$`, "u");
-var recoverySnapshotMaxBytes = keeperLimits.preview.maxAggregateBytes * 3 + keeperLimits.preview.maxChanges * 2048;
+var recoverySnapshotMaxBytes = 512 * 1024 * 1024;
+var recoverySnapshotExpandedMaxBytes = managedReadLimits.maxAggregateBytes * 3;
 var recoverySnapshotMaxObservedFiles = keeperLimits.changesets.maxPairsPerProject;
 function exactObject2(value, keys) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -34844,8 +35074,18 @@ function parseRecoveryFileRecord(value) {
   return value;
 }
 function parseRecoverySnapshotRecord(value, name, canonicalRoot, activeChangeset) {
-  if (!exactObject2(value, ["version", "root", "changesetId", "createdAt", "files"]) || value.version !== 1 || value.root !== canonicalRoot || typeof value.changesetId !== "string" || !Number.isSafeInteger(value.createdAt) || Number(value.createdAt) < 0 || !value.files || typeof value.files !== "object" || Array.isArray(value.files)) {
+  const hasAuthorization = Boolean(value && typeof value === "object" && Object.hasOwn(value, "authorization"));
+  if (!exactObject2(value, ["version", "root", "changesetId", "createdAt", "files", ...hasAuthorization ? ["authorization"] : []]) || value.version !== 1 || value.root !== canonicalRoot || typeof value.changesetId !== "string" || !Number.isSafeInteger(value.createdAt) || Number(value.createdAt) < 0 || !value.files || typeof value.files !== "object" || Array.isArray(value.files)) {
     throw new Error("Recovery snapshot has an unexpected schema");
+  }
+  let authorization;
+  if (hasAuthorization) {
+    const audit = value.authorization;
+    if (!exactObject2(audit, ["source", "policy", "diffDigest"]) || !["easy-policy", "human-form"].includes(String(audit.source)) || typeof audit.diffDigest !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(audit.diffDigest)) throw new Error("Recovery authorization audit is invalid");
+    const policy = freezeRuntimePolicy(audit.policy);
+    if (audit.source === "easy-policy" !== policy.easyMode) throw new Error("Recovery authorization source does not match its policy");
+    authorization = { source: audit.source, policy, diffDigest: audit.diffDigest };
+    if (activeChangeset?.changesetId === value.changesetId && (!activeChangeset.policy || !sameRuntimePolicy(policy, activeChangeset.policy) || audit.diffDigest !== activeChangeset.diffDigest)) throw new Error("Recovery authorization audit does not match the authenticated changeset");
   }
   const match = recoverySnapshotNamePattern.exec(name);
   if (!match || Number(match[1]) !== value.createdAt || match[2] !== value.changesetId) {
@@ -34874,6 +35114,7 @@ function parseRecoverySnapshotRecord(value, name, canonicalRoot, activeChangeset
     root: value.root,
     changesetId: value.changesetId,
     createdAt: value.createdAt,
+    ...authorization ? { authorization } : {},
     files
   };
 }
@@ -34896,7 +35137,7 @@ async function readExactRecoveryBytes(handle, size) {
   }
   return contents;
 }
-async function readRecoverySnapshot(cache, path, name, canonicalRoot, activeChangeset) {
+async function readRecoverySnapshot(cache, path, name, canonicalRoot, activeChangeset, expandedInventoryBudget) {
   try {
     await validateCacheFile(cache, path, false);
     const identity = await captureSecurePathIdentity(cache, path, "file");
@@ -34925,7 +35166,9 @@ async function readRecoverySnapshot(cache, path, name, canonicalRoot, activeChan
     try {
       const serialized = contents.toString("utf8");
       if (!Buffer.from(serialized, "utf8").equals(contents)) throw new Error("non-canonical UTF-8");
-      parsed = JSON.parse(serialized);
+      const wire = JSON.parse(serialized);
+      if (!(wire && typeof wire === "object" && Object.hasOwn(wire, "textStorage"))) expandedInventoryBudget?.consume(contents.byteLength);
+      parsed = decodeStoredText(wire, (bytes) => expandedInventoryBudget?.consume(bytes));
     } catch {
       throw new Error("Recovery snapshot JSON is invalid");
     }
@@ -35071,7 +35314,27 @@ async function storeRecoverySnapshot(cache, changeset, now, hooks = {}) {
     throw new Error("Recovery snapshot directory exceeds its bounded entry limit");
   }
   await validateCacheFiles(cache, names.map((name) => join7(directory, name)));
-  let snapshots = await Promise.all(names.map((name) => readRecoverySnapshot(cache, join7(directory, name), name, canonicalRoot, changeset)));
+  let snapshots = [];
+  const recoveryInventoryBytes = new ByteBudget("Recovery snapshot inventory", 1024 * 1024 * 1024);
+  const activeSnapshotBytes = new ByteBudget("Expanded active recovery snapshots", recoverySnapshotExpandedMaxBytes);
+  const inventoryDeadline = new DeadlineBudget("Recovery snapshot inventory", 3e4);
+  for (const name of names) {
+    inventoryDeadline.check();
+    const snapshotPath = join7(directory, name);
+    recoveryInventoryBytes.consume(Number((await lstat9(snapshotPath)).size));
+    const isActive = recoverySnapshotNamePattern.exec(name)?.[2] === changeset.changesetId;
+    const snapshot2 = await readRecoverySnapshot(
+      cache,
+      snapshotPath,
+      name,
+      canonicalRoot,
+      changeset,
+      isActive ? activeSnapshotBytes : new ByteBudget("Expanded recovery snapshot", recoverySnapshotExpandedMaxBytes)
+    );
+    if (!isActive) snapshot2.value = { ...snapshot2.value, files: {} };
+    snapshots.push(snapshot2);
+    inventoryDeadline.check();
+  }
   let active = snapshots.filter(({ changesetId }) => changesetId === changeset.changesetId).sort((left, right) => right.createdAt - left.createdAt || right.name.localeCompare(left.name, "en-US"));
   if (active.some((snapshot2) => !isDeepStrictEqual(snapshot2.value.files, files))) {
     throw new Error("Active recovery snapshot does not match the currently authenticated pre-state");
@@ -35094,6 +35357,11 @@ async function storeRecoverySnapshot(cache, changeset, now, hooks = {}) {
       root: canonicalRoot,
       changesetId: changeset.changesetId,
       createdAt: now,
+      ...changeset.policy ? { authorization: {
+        source: changeset.policy.easyMode ? "easy-policy" : "human-form",
+        policy: { ...changeset.policy },
+        diffDigest: changeset.diffDigest
+      } } : {},
       files
     });
     const published = await readRecoverySnapshot(cache, path, name, canonicalRoot, changeset);
@@ -35153,7 +35421,7 @@ function projectIdentityFromMetadata(path, canonicalPath, parent, metadata, pare
   };
 }
 async function readExactProjectFile(handle, size, relativeLabel, budget) {
-  const maxFileBytes = budget?.maxFileBytes ?? keeperLimits.preview.maxFileBytes;
+  const maxFileBytes = budget?.maxFileBytes ?? managedReadLimits.maxFileBytes;
   if (size < 0n || size > BigInt(maxFileBytes)) {
     throw new Error(`${budget?.label ?? "Output file"} exceeds the per-file limit of ${maxFileBytes} bytes: ${relativeLabel}`);
   }
@@ -35786,25 +36054,67 @@ async function atomicApply(changeset, verifyBeforeCommit, beforeCommit, beforeRe
     );
   }
 }
-function createTransactionService(options = {}) {
+function createTransactionService(options = {}, sharedApprovalAuthority) {
   const cacheDirectory = resolveCacheDirectory(
     options,
     options.environment ?? process.env,
     options.homeDirectory ?? homedir2()
   );
   const now = options.now ?? (() => Date.now());
-  const limits = resolveKeeperLimits(options.limits);
-  const approvalAuthority = createApplyApprovalAuthority(now);
+  const policy = freezeRuntimePolicy(options.runtimePolicy);
+  const limits = resolveKeeperLimits(options.limits, policy);
+  const approvalAuthority = sharedApprovalAuthority ?? createApplyApprovalAuthority(now);
+  const readFileBytes = Math.min(managedReadLimits.maxFileBytes, options.limits?.preview?.maxFileBytes ?? Infinity);
+  const readAggregateBytes = Math.min(managedReadLimits.maxAggregateBytes, options.limits?.preview?.maxAggregateBytes ?? Infinity);
   const changesetStore = createChangesetStore({
     cacheDirectory,
     environment: options.environment,
     homeDirectory: options.homeDirectory,
     now,
-    limits: options.limits
+    limits: options.limits,
+    runtimePolicy: policy
   });
   async function loadAuthenticatedChangeset(request) {
     await validateManagedRoots(request.root);
-    return changesetStore.loadAuthenticated(request.root, request.changesetId);
+    const loaded = await changesetStore.loadAuthenticated(request.root, request.changesetId);
+    approvalBinding(loaded.changeset);
+    if (!sameRuntimePolicy(loaded.changeset.policy, policy)) {
+      throw new Error("Settings revision changed since preview; regenerate the preview update");
+    }
+    assertWriteBudget(loaded.changeset.changes);
+    return loaded;
+  }
+  function assertWriteBudget(changes) {
+    if (changes.length > limits.preview.maxChanges) throw new Error(`Preview changes exceeds the limit of ${limits.preview.maxChanges} items`);
+    const aggregate = new ByteBudget("Preview aggregate bytes", limits.preview.maxAggregateBytes);
+    for (const change of changes) {
+      const bytes = change.delete ? 0 : Buffer.byteLength(change.content ?? "", "utf8");
+      aggregate.consume(bytes);
+      if (bytes > limits.preview.maxFileBytes) throw new Error(`Preview file ${change.path} exceeds the per-file limit of ${limits.preview.maxFileBytes} bytes`);
+    }
+  }
+  function previewPage(changeset, cursor) {
+    const bytes = Buffer.from(changeset.diff, "utf8");
+    let start = 0;
+    if (cursor !== void 0) {
+      if (typeof cursor !== "string" || cursor.length > 256) throw new Error("Invalid preview cursor");
+      const prefix = `${changeset.changesetId}:${changeset.diffDigest}:`;
+      if (!cursor.startsWith(prefix) || !/^(0|[1-9][0-9]*)$/u.test(cursor.slice(prefix.length))) throw new Error("Invalid preview cursor binding");
+      start = Number(cursor.slice(prefix.length));
+      if (!Number.isSafeInteger(start) || start >= bytes.length || start > 0 && (bytes[start] & 192) === 128) throw new Error("Invalid preview cursor offset");
+    }
+    const pageBytes = Math.max(4, Math.min(limits.preview.maxDiffBytes, 128 * 1024));
+    let end = Math.min(bytes.length, start + pageBytes);
+    while (end < bytes.length && (bytes[end] & 192) === 128) end -= 1;
+    const complete = end === bytes.length;
+    return { diff: bytes.subarray(start, end).toString("utf8"), nextCursor: complete ? null : `${changeset.changesetId}:${changeset.diffDigest}:${end}`, complete, totalBytes: bytes.length, diffDigest: changeset.diffDigest };
+  }
+  async function readPreview(input) {
+    const request = await resolveChangesetRequest(input);
+    const { changeset } = await loadAuthenticatedChangeset(request);
+    const page = { changesetId: changeset.changesetId, policy: { ...policy }, ...previewPage(changeset, input.cursor) };
+    assertToolResultBudget(page);
+    return page;
   }
   async function inspectChangesetForApproval(input) {
     const request = await resolveChangesetRequest(input);
@@ -35819,11 +36129,12 @@ function createTransactionService(options = {}) {
   async function previewUpdate(input) {
     if (typeof input.root !== "string") throw new Error("A repository root is required");
     const changes = requestedChanges(input.changes);
+    if (changes.length > limits.preview.maxChanges) throw new Error(`Preview changes exceeds the limit of ${limits.preview.maxChanges} items`);
     let candidatePack = typeof input.pack === "object" && input.pack !== null && !Array.isArray(input.pack) ? input.pack : void 0;
     const previewReads = projectFileReadBudget(
       "Preview file reads",
-      limits.preview.maxFileBytes,
-      limits.preview.maxAggregateBytes,
+      readFileBytes,
+      readAggregateBytes,
       limits.scan.maxFiles,
       limits.scan.deadlineMs
     );
@@ -35836,6 +36147,7 @@ function createTransactionService(options = {}) {
     };
     if (candidatePack) {
       assertPackValidationInputBounds(candidatePack, {
+        runtimePolicy: policy,
         limits: options.limits,
         resourceBudget: candidateValidationResources
       });
@@ -35843,6 +36155,7 @@ function createTransactionService(options = {}) {
       if (serializedCandidatePack === void 0) throw new Error("Candidate pack must be serializable JSON");
       candidatePack = JSON.parse(serializedCandidatePack);
     }
+    assertSerializedWithin("Preview arguments", input, limits.mcpArgumentBytes);
     const decisions = redundancyDecisions(input.redundancyDecisions);
     const analysisId = typeof input.analysisId === "string" ? input.analysisId : void 0;
     if (decisions && !analysisId || analysisId && !decisions) {
@@ -35976,9 +36289,10 @@ function createTransactionService(options = {}) {
         applicable: false,
         conflicts,
         ...candidatePack ? { validation: conflictValidation(conflicts) } : {},
-        changes: persisted.map(({ previousHash: _previousHash, managedBlocks: _managedBlocks, ...change }) => change)
+        changes: responseChanges(persisted)
       };
     }
+    assertWriteBudget(persisted);
     const capturedManifest = [...originals.entries()].find(([path]) => windowsRepositoryPathKey(path) === manifestKey);
     const exactCurrentManifestBytes = capturedManifest ? capturedManifest[1] : await boundedOptionalProjectRead(scope.root, currentManifestTarget, manifestPath, previewReads);
     if (!equalOptionalBytes(currentManifestBytesAtPreview, exactCurrentManifestBytes)) {
@@ -36026,6 +36340,7 @@ function createTransactionService(options = {}) {
         [...overlay.entries()].map(([path, value]) => [windowsRepositoryPathKey(path), value])
       );
       validation = await validatePack({ root: scope.root, pack: candidatePack }, {
+        runtimePolicy: policy,
         overlay,
         preaccountedOverlay: new Set(historyDependencySnapshot.keys()),
         limits: options.limits,
@@ -36113,7 +36428,7 @@ function createTransactionService(options = {}) {
           applicable: false,
           conflicts: ["Candidate pack validation failed"],
           validation,
-          changes: persisted.map(({ previousHash: _previousHash, managedBlocks: _managedBlocks, ...change }) => change)
+          changes: responseChanges(persisted)
         };
       }
       if (!confirmedValidationDependencyDigest) {
@@ -36128,13 +36443,16 @@ function createTransactionService(options = {}) {
     const candidateSourceRevision = candidatePack?.sourceRevision && typeof candidatePack.sourceRevision === "object" && !Array.isArray(candidatePack.sourceRevision) ? candidatePack.sourceRevision.files : void 0;
     const sourcePaths = candidateSourceRevision && typeof candidateSourceRevision === "object" && !Array.isArray(candidateSourceRevision) ? Object.keys(candidateSourceRevision).sort() : void 0;
     const confirmedSemanticDecisionIds = semanticDecisionIds(currentPackForChangeset, candidatePack, decisions);
+    const diff = unifiedDiff(persisted, originals);
     const changeset = {
-      version: 2,
+      version: 3,
+      policy,
+      diff,
       changesetId,
       root: scope.root,
       createdAt,
       expiresAt: createdAt + changesetLifetimeMs,
-      diffDigest: persistedDiffDigest(persisted, confirmedSemanticDecisionIds),
+      diffDigest: persistedDiffDigest(persisted, confirmedSemanticDecisionIds, policy, diff),
       archiveActions: confirmedArchiveActions,
       semanticDecisionIds: confirmedSemanticDecisionIds,
       historyFiles: confirmedHistoryFiles,
@@ -36145,12 +36463,6 @@ function createTransactionService(options = {}) {
       sourceFiles: sourcePaths && sourcePaths.length > 0 ? Object.fromEntries(sourcePaths.map((path) => [path, String(candidateSourceRevision[path])])) : await sourceFingerprint(sourceScope, options),
       ...candidatePack && confirmedValidationDependencyDigest ? { validatedPack: candidatePack, validationDependencyDigest: confirmedValidationDependencyDigest } : {}
     };
-    const diff = unifiedDiff(persisted, originals);
-    const diffBytes = Buffer.byteLength(diff, "utf8");
-    if (diffBytes > limits.preview.maxDiffBytes) {
-      const kibibytes = limits.preview.maxDiffBytes / 1024;
-      throw new Error(`Generated diff exceeds the limit of ${kibibytes} KiB (${limits.preview.maxDiffBytes} bytes)`);
-    }
     const previewResult = {
       applicable: true,
       conflicts: [],
@@ -36158,10 +36470,15 @@ function createTransactionService(options = {}) {
       changesetId,
       createdAt: new Date(createdAt).toISOString(),
       expiresAt: new Date(changeset.expiresAt).toISOString(),
-      diffDigest: changeset.diffDigest,
       summary: summaryFor(persisted),
-      diff,
-      changes: persisted.map(({ previousHash: _previousHash, managedBlocks: _managedBlocks, ...change }) => change)
+      statistics: {
+        files: persisted.length,
+        writeBytes: persisted.reduce((total, change) => total + (change.delete ? 0 : Buffer.byteLength(change.content, "utf8")), 0),
+        ...approvalBinding(changeset).summary
+      },
+      policy: { ...policy },
+      ...previewPage(changeset),
+      changes: responseChanges(persisted)
     };
     assertToolResultBudget(previewResult);
     const prepared = await changesetStore.preparePublication(changeset);
@@ -36195,8 +36512,8 @@ function createTransactionService(options = {}) {
       };
       const targetReads = projectFileReadBudget(
         "Apply target file reads",
-        limits.preview.maxFileBytes,
-        limits.preview.maxAggregateBytes,
+        readFileBytes,
+        readAggregateBytes,
         limits.scan.maxFiles,
         limits.scan.deadlineMs
       );
@@ -36227,8 +36544,8 @@ function createTransactionService(options = {}) {
       }
       const dependencyReads = projectFileReadBudget(
         "Apply dependency file reads",
-        limits.preview.maxFileBytes,
-        limits.preview.maxAggregateBytes,
+        readFileBytes,
+        readAggregateBytes,
         limits.scan.maxFiles,
         limits.scan.deadlineMs
       );
@@ -36282,6 +36599,7 @@ function createTransactionService(options = {}) {
         if (changeset.validatedPack && changeset.validationDependencyDigest) {
           let currentDependencyDigest;
           const currentValidation = await validatePack({ root: changeset.root, pack: changeset.validatedPack }, {
+            runtimePolicy: policy,
             overlay: validationOverlay,
             preaccountedOverlay: validationOverlayKeys,
             limits: options.limits,
@@ -36327,19 +36645,26 @@ function createTransactionService(options = {}) {
       }
       return {
         applied: true,
+        policy: { ...policy },
+        authorizationSource: binding.authorizationSource,
         changesetId: request.changesetId,
-        changes: changeset.changes.map(({ previousHash: _previousHash, managedBlocks: _managedBlocks, ...change }) => change)
+        changes: responseChanges(changeset.changes)
       };
     });
   }
-  return { previewUpdate, inspectChangesetForApproval, issueApplyAuthorization, applyUpdate };
+  return { previewUpdate, readPreview, inspectChangesetForApproval, issueApplyAuthorization, applyUpdate };
+}
+function responseChanges(changes) {
+  const full = changes.map(({ previousHash: _previousHash, managedBlocks: _managedBlocks, ...change }) => change);
+  if (Buffer.byteLength(JSON.stringify(full), "utf8") < 128 * 1024) return full;
+  return changes.map((change) => ({ path: change.path, ...change.delete ? { delete: true } : { contentBytes: Buffer.byteLength(change.content, "utf8"), contentOmitted: true } }));
 }
 
 // src/knowledge/history.ts
 import { createHash as createHash10 } from "node:crypto";
 import { lstat as lstat10, open as open10, realpath as realpath8 } from "node:fs/promises";
 import { isAbsolute as isAbsolute6, relative as relative6, resolve as resolve8, sep as sep5 } from "node:path";
-import { TextDecoder as TextDecoder5 } from "node:util";
+import { TextDecoder as TextDecoder6 } from "node:util";
 function sha2562(value) {
   return `sha256:${createHash10("sha256").update(value).digest("hex")}`;
 }
@@ -36511,8 +36836,8 @@ async function queryHistory(input, options = {}) {
   const root = await realpath8(resolve8(input.root));
   const limits = resolveKeeperLimits(options.limits);
   const historyBudget = {
-    maxFileBytes: limits.preview.maxFileBytes,
-    bytes: new ByteBudget("History aggregate bytes", limits.preview.maxAggregateBytes),
+    maxFileBytes: Math.min(managedReadLimits.maxFileBytes, options.limits?.preview?.maxFileBytes ?? Infinity),
+    bytes: new ByteBudget("History aggregate bytes", Math.min(managedReadLimits.maxAggregateBytes, options.limits?.preview?.maxAggregateBytes ?? Infinity)),
     files: new CounterBudget("History files", 4)
   };
   const manifestBytes = await safeRead(
@@ -36526,7 +36851,7 @@ async function queryHistory(input, options = {}) {
     if (manifestBytes.length >= 3 && manifestBytes[0] === 239 && manifestBytes[1] === 187 && manifestBytes[2] === 191) {
       throw new Error("UTF-8 BOM is not canonical");
     }
-    manifestValue = JSON.parse(new TextDecoder5("utf-8", { fatal: true }).decode(manifestBytes));
+    manifestValue = JSON.parse(new TextDecoder6("utf-8", { fatal: true }).decode(manifestBytes));
   } catch (error2) {
     const detail = error2 instanceof Error ? error2.message : "invalid JSON";
     throw new Error(`History manifest is invalid: ${detail}`);
@@ -36633,29 +36958,340 @@ async function queryHistory(input, options = {}) {
   return result;
 }
 
+// src/settings/store.ts
+import { randomUUID as randomUUID4 } from "node:crypto";
+import { lstat as lstat11, open as open11, rename as rename4, unlink as unlink3 } from "node:fs/promises";
+import { homedir as homedir3 } from "node:os";
+import { join as join8 } from "node:path";
+var valuesSchema = external_exports.object({ easyMode: external_exports.boolean(), maxUpdateMiB: external_exports.number().int().min(1).max(64) }).strict();
+var settingsSchema = valuesSchema.extend({ version: external_exports.literal(1), revision: external_exports.string().min(1).max(128) }).strict();
+var SettingsRevisionConflictError = class extends Error {
+  constructor() {
+    super("Settings revision conflict: \u8BBE\u7F6E\u5DF2\u5728\u5176\u4ED6\u9762\u677F\u66F4\u6539\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5\u3002");
+  }
+};
+var defaults = Object.freeze({ version: 1, revision: "default", easyMode: false, maxUpdateMiB: 8 });
+async function readSettings(layout) {
+  const path = join8(layout.root, "settings.json");
+  await validateCacheFile(layout, path, true);
+  let handle;
+  try {
+    handle = await open11(path, "r");
+  } catch (error2) {
+    if (error2.code === "ENOENT") return { ...defaults };
+    throw error2;
+  }
+  try {
+    const identity = await captureSecurePathIdentity(layout, path, "file");
+    const metadata = await handle.stat({ bigint: true });
+    assertSecureOwnerFileMetadata(metadata, path, 1n);
+    if (metadata.dev !== identity.dev || metadata.ino !== identity.ino) throw new Error("Settings file identity changed");
+    if (metadata.size > 4096n) throw new Error("Settings file exceeds the 4096-byte limit");
+    const bytes = Buffer.alloc(4097);
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+    if (bytesRead > 4096) throw new Error("Settings file exceeds the 4096-byte limit");
+    await validateSecurePathIdentity(layout, identity);
+    return settingsSchema.parse(JSON.parse(bytes.subarray(0, bytesRead).toString("utf8")));
+  } catch (error2) {
+    throw new Error("Invalid Keeper settings; repair the settings file before continuing", { cause: error2 });
+  } finally {
+    await handle.close();
+  }
+}
+function createSettingsStore(options = {}) {
+  async function locked(operation) {
+    const layout = await prepareSecureCache(options);
+    return withProcessLease(
+      { layout, projectRoot: layout.root, now: Date.now },
+      (lease) => operation(layout, () => lease.assertOwned())
+    );
+  }
+  return {
+    async read() {
+      const root = resolveCacheDirectory(options, options.environment ?? process.env, options.homeDirectory ?? homedir3());
+      try {
+        await lstat11(join8(root, "settings.json"));
+      } catch (error2) {
+        if (error2.code === "ENOENT") return { ...defaults };
+        throw error2;
+      }
+      return locked((layout) => readSettings(layout));
+    },
+    async save(values, expectedRevision) {
+      const valid = valuesSchema.parse(values);
+      if (typeof expectedRevision !== "string" || !expectedRevision || expectedRevision.length > 128) throw new Error("Invalid settings revision");
+      return locked(async (layout, assertOwned) => {
+        const current = await readSettings(layout);
+        if (current.revision !== expectedRevision) throw new SettingsRevisionConflictError();
+        const next = { version: 1, revision: randomUUID4(), ...valid };
+        const target = join8(layout.root, "settings.json");
+        const temporary = join8(layout.root, `.settings-${randomUUID4()}.tmp`);
+        const parent = await captureSecurePathIdentity(layout, layout.root, "directory");
+        const handle = await open11(temporary, "wx", 384);
+        const created = await handle.stat({ bigint: true });
+        let published = false;
+        try {
+          await handle.writeFile(`${JSON.stringify(next)}
+`, "utf8");
+          await handle.sync();
+          await handle.close();
+          const temporaryIdentity = await captureSecurePathIdentity(layout, temporary, "file");
+          if (temporaryIdentity.dev !== created.dev || temporaryIdentity.ino !== created.ino) throw new Error("Settings temporary file identity changed");
+          await validateCacheFile(layout, temporary, false);
+          await validateSecurePathIdentity(layout, parent);
+          await validateCacheFile(layout, target, true);
+          await assertOwned();
+          await validateSecurePathIdentity(layout, temporaryIdentity);
+          await rename4(temporary, target);
+          published = true;
+          await validateSecurePathIdentity(layout, { ...temporaryIdentity, path: target });
+          const finalHandle = await open11(target, "r+");
+          try {
+            const finalMetadata = await finalHandle.stat({ bigint: true });
+            if (finalMetadata.dev !== created.dev || finalMetadata.ino !== created.ino) throw new Error("Settings replacement identity changed");
+            assertSecureOwnerFileMetadata(finalMetadata, target, 1n);
+            await finalHandle.sync();
+          } finally {
+            await finalHandle.close();
+          }
+          if (process.platform !== "win32") {
+            const directory = await open11(layout.root, "r");
+            try {
+              await directory.sync();
+            } finally {
+              await directory.close();
+            }
+          }
+          return next;
+        } finally {
+          await handle.close().catch(() => void 0);
+          if (!published) {
+            try {
+              const remaining = await captureSecurePathIdentity(layout, temporary, "file");
+              if (remaining.dev !== created.dev || remaining.ino !== created.ino) throw new Error("Settings temporary cleanup identity changed");
+              await validateSecurePathIdentity(layout, remaining);
+              await unlink3(temporary);
+            } catch (error2) {
+              if (error2.code !== "ENOENT") throw error2;
+            }
+          }
+        }
+      });
+    }
+  };
+}
+
+// src/settings/panel.ts
+import { execFile as execFile2 } from "node:child_process";
+import { randomBytes as randomBytes7, timingSafeEqual as timingSafeEqual5 } from "node:crypto";
+import { createServer } from "node:http";
+import { promisify as promisify2 } from "node:util";
+
+// src/settings/ui.ts
+function settingsHtml(nonce) {
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Keeper \u8BBE\u7F6E</title>
+<style nonce="${nonce}">:root{font-family:system-ui,sans-serif;color:#e5eaf2;background:#111722;color-scheme:dark}body{max-width:640px;margin:8vh auto;padding:24px}main{background:#1b2433;border:1px solid #39465d;border-radius:18px;padding:30px}h1{font-size:28px;margin-top:0}p{line-height:1.7;color:#b8c4d6}label{display:block;font-weight:650;margin:24px 0 10px}input[type=checkbox]{width:22px;height:22px;vertical-align:middle;margin-right:12px;accent-color:#80b8ff}input[type=number]{width:100px;padding:10px;border:1px solid #68778f;border-radius:6px;font-size:17px}button{margin:18px 10px 0 0;padding:12px 16px;border-radius:7px;border:1px solid #8298b5;font:inherit;cursor:pointer}button[type=submit]{background:#9ac5ff;color:#11213a}button:disabled{opacity:.5;cursor:wait}:focus-visible{outline:3px solid #ffc85c;outline-offset:4px}#status{min-height:3em;white-space:pre-wrap}#current{border-top:1px solid #39465d;padding-top:18px;font-size:14px}.error{color:#ffadad!important}</style></head>
+<body><main><h1>Keeper \u8BBE\u7F6E</h1><p>\u4F5C\u7528\u57DF\uFF1A\u672C\u673A\u5F53\u524D\u7528\u6237\u7684 Keeper \u5B89\u88C5\uFF0C\u8DE8\u9879\u76EE\u4E0E\u4EFB\u52A1\u4FDD\u7559\u3002\u4FDD\u5B58\u540E\u5728\u4E0B\u4E00\u6B21\u64CD\u4F5C\u751F\u6548\uFF0C\u6B63\u5728\u6267\u884C\u7684\u64CD\u4F5C\u7EE7\u7EED\u4F7F\u7528\u539F\u8BBE\u7F6E\u3002</p>
+<form id="settings"><fieldset id="fields" disabled><legend>\u66F4\u65B0\u7B56\u7565</legend><label><input id="easy" type="checkbox" role="switch">Easy \u6A21\u5F0F</label><p>\u8DF3\u8FC7 Keeper \u4EBA\u5DE5\u786E\u8BA4\uFF1B\u81EA\u52A8\u6821\u9A8C\u3001\u51B2\u7A81\u68C0\u67E5\u548C\u6062\u590D\u4FDD\u62A4\u4ECD\u4FDD\u7559\u3002\u5BBF\u4E3B\u81EA\u5DF1\u7684\u5DE5\u5177\u6743\u9650\u4E0D\u53D7\u5F71\u54CD\u3002</p><label for="limit">\u5355\u6B21\u66F4\u65B0\u5408\u8BA1\u4E0A\u9650\uFF08MiB\uFF09</label><input id="limit" type="number" min="1" max="64" step="1" required value="8" aria-describedby="range"><p id="range">1\u201364 \u7684\u6574\u6570\u3002\u6309\u672C\u6B21\u5168\u90E8\u5F85\u5199\u5165\u6587\u4EF6\u7684\u6700\u7EC8 UTF-8 \u5185\u5BB9\u8BA1\u91CF\u3002</p><p id="single">\u666E\u901A\u6A21\u5F0F\uFF1A\u5355\u6587\u4EF6\u4E0A\u9650 2 MiB\u3002</p><button type="submit">\u4FDD\u5B58\u8BBE\u7F6E</button><button type="button" id="reset">\u6062\u590D\u9ED8\u8BA4\u503C</button></fieldset></form>
+<p id="current">\u6B63\u5728\u8BFB\u53D6\u5F53\u524D\u751F\u6548\u8BBE\u7F6E\u2026</p><p id="status" role="status" aria-live="polite"></p></main>
+<script nonce="${nonce}">"use strict";
+const easy=document.getElementById('easy'),limit=document.getElementById('limit'),fields=document.getElementById('fields'),status=document.getElementById('status'),current=document.getElementById('current');
+const fragment=location.hash.slice(1),key='keeper-settings-session';
+let token=fragment||sessionStorage.getItem(key)||'';
+if(fragment){sessionStorage.setItem(key,fragment);history.replaceState(null,'',location.pathname);}
+let revision='',saved=null;
+function note(message,error=false){status.textContent=message;status.className=error?'error':'';}
+function explain(){document.getElementById('single').textContent=easy.checked?'Easy \u6A21\u5F0F\uFF1A\u65E0\u72EC\u7ACB\u5355\u6587\u4EF6\u4E0A\u9650\uFF0C\u53D7\u672C\u6B21\u5408\u8BA1\u4E0A\u9650\u7EA6\u675F\u3002':'\u666E\u901A\u6A21\u5F0F\uFF1A\u5355\u6587\u4EF6\u4E0A\u9650 2 MiB\u3002';}
+function changed(){explain();note(saved&&(easy.checked!==saved.easyMode||Number(limit.value)!==saved.maxUpdateMiB)?'\u6709\u672A\u4FDD\u5B58\u7684\u66F4\u6539\u3002':'\u5F53\u524D\u8BBE\u7F6E\u5DF2\u4FDD\u5B58\u3002');}
+function display(value){revision=value.revision;saved=value;easy.checked=value.easyMode;limit.value=String(value.maxUpdateMiB);current.textContent='\u5F53\u524D\u751F\u6548\uFF1A'+(value.easyMode?'Easy \u6A21\u5F0F':'\u666E\u901A\u6A21\u5F0F')+' \xB7 \u5408\u8BA1 '+value.maxUpdateMiB+' MiB';explain();}
+async function request(method,body){const response=await fetch('/api/settings',{method,headers:{'content-type':'application/json','x-keeper-settings-session':token},body:body?JSON.stringify(body):undefined,cache:'no-store'});const data=await response.json();if(!response.ok)throw new Error(data.error||'\u8BF7\u6C42\u5931\u8D25');return data;}
+easy.addEventListener('change',changed);limit.addEventListener('input',changed);
+document.getElementById('reset').addEventListener('click',()=>{easy.checked=false;limit.value='8';explain();note('\u5DF2\u586B\u5165\u9ED8\u8BA4\u503C\uFF1B\u70B9\u51FB\u201C\u4FDD\u5B58\u8BBE\u7F6E\u201D\u540E\u751F\u6548\u3002');});
+document.getElementById('settings').addEventListener('submit',async(event)=>{event.preventDefault();if(!event.isTrusted)return;const amount=Number(limit.value);if(!Number.isInteger(amount)||amount<1||amount>64){note('\u8BF7\u8F93\u5165 1\u201364 \u7684\u6574\u6570\u3002',true);return;}fields.disabled=true;note('\u6B63\u5728\u4FDD\u5B58\u2026');try{display(await request('POST',{expectedRevision:revision,values:{easyMode:easy.checked,maxUpdateMiB:amount}}));note('\u4FDD\u5B58\u6210\u529F\u3002\u4E0B\u4E00\u6B21\u64CD\u4F5C\u5C06\u4F7F\u7528\u8FD9\u4E9B\u8BBE\u7F6E\u3002');}catch(error){note(error.message,true);}finally{fields.disabled=false;}});
+(async()=>{try{display(await request('GET'));fields.disabled=!token;note(token?'\u5F53\u524D\u8BBE\u7F6E\u5DF2\u4FDD\u5B58\u3002':'\u6B64\u94FE\u63A5\u4E3A\u53EA\u8BFB\u9875\u9762\u3002\u8BF7\u5728\u804A\u5929\u4E2D\u8C03\u7528\u201C\u6253\u5F00 Keeper \u8BBE\u7F6E\u201D\uFF0C\u4F7F\u7528\u81EA\u52A8\u6253\u5F00\u7684\u6D4F\u89C8\u5668\u9875\u9762\u7F16\u8F91\u3002',!token);}catch(error){note(error.message,true);}})();
+</script></body></html>`;
+}
+
+// src/settings/panel.ts
+var execute = promisify2(execFile2);
+async function launchBrowser(url) {
+  const options = { windowsHide: true, timeout: 15e3 };
+  try {
+    if (process.platform === "win32") await execute("rundll32.exe", ["url.dll,FileProtocolHandler", url], options);
+    else if (process.platform === "darwin") await execute("open", [url], options);
+    else await execute("xdg-open", [url], options);
+  } catch {
+    throw new Error("\u65E0\u6CD5\u6253\u5F00\u672C\u673A\u6D4F\u89C8\u5668\u3002\u8BF7\u68C0\u67E5\u9ED8\u8BA4\u6D4F\u89C8\u5668\u914D\u7F6E\u540E\u91CD\u65B0\u6253\u5F00 Keeper \u8BBE\u7F6E\u3002");
+  }
+}
+var saveSchema = external_exports.object({
+  expectedRevision: external_exports.string().min(1).max(128),
+  values: external_exports.object({ easyMode: external_exports.boolean(), maxUpdateMiB: external_exports.number().int().min(1).max(64) }).strict()
+}).strict();
+function json(response, status, value) {
+  response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  response.end(JSON.stringify(value));
+}
+async function body(request) {
+  const chunks = [];
+  let count = 0;
+  for await (const chunk of request) {
+    count += chunk.length;
+    if (count > 4096) throw Object.assign(new Error("\u8BF7\u6C42\u8FC7\u5927\u3002"), { status: 413 });
+    chunks.push(Buffer.from(chunk));
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+async function openSettingsPanel(store, options = {}) {
+  const secret = randomBytes7(32).toString("base64url");
+  const nonce = randomBytes7(18).toString("base64url");
+  const expires = Date.now() + 15 * 6e4;
+  let origin = "";
+  const server = createServer((request, response) => {
+    response.setHeader("cache-control", "no-store");
+    response.setHeader("referrer-policy", "no-referrer");
+    response.setHeader("x-content-type-options", "nosniff");
+    response.setHeader("x-frame-options", "DENY");
+    response.setHeader("content-security-policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`);
+    void (async () => {
+      if (Date.now() >= expires) return json(response, 410, { error: "\u8BBE\u7F6E\u9875\u9762\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u3002" });
+      if (request.headers.host !== new URL(origin).host || request.headers.origin && request.headers.origin !== origin) {
+        return json(response, 403, { error: "\u62D2\u7EDD\u975E\u672C\u673A\u6765\u6E90\u3002" });
+      }
+      if (request.method === "GET" && request.url === "/") {
+        response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+        response.end(settingsHtml(nonce));
+        return;
+      }
+      if (request.url !== "/api/settings") return json(response, 404, { error: "\u9875\u9762\u4E0D\u5B58\u5728\u3002" });
+      if (request.method === "GET") return json(response, 200, await store.read());
+      if (request.method !== "POST") return json(response, 405, { error: "\u4E0D\u652F\u6301\u6B64\u64CD\u4F5C\u3002" });
+      const token = request.headers["x-keeper-settings-session"];
+      if (request.headers.origin !== origin || typeof token !== "string" || token.length !== secret.length || !timingSafeEqual5(Buffer.from(token), Buffer.from(secret))) {
+        return json(response, 403, { error: "\u8BBE\u7F6E\u4F1A\u8BDD\u65E0\u6548\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u8BBE\u7F6E\u3002" });
+      }
+      if (!/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(request.headers["content-type"] ?? "")) {
+        return json(response, 415, { error: "\u5FC5\u987B\u4F7F\u7528 JSON\u3002" });
+      }
+      const input = saveSchema.parse(await body(request));
+      return json(response, 200, await store.save(input.values, input.expectedRevision));
+    })().catch((error2) => {
+      if (response.destroyed) return;
+      const status = error2 instanceof SettingsRevisionConflictError ? 409 : error2.status === 413 ? 413 : error2 instanceof external_exports.ZodError || error2 instanceof SyntaxError ? 400 : 500;
+      json(response, status, { error: status === 409 ? error2.message : status === 413 ? "\u8BF7\u6C42\u8FC7\u5927\u3002" : status === 400 ? "\u8BBE\u7F6E\u683C\u5F0F\u65E0\u6548\uFF0C\u8BF7\u8F93\u5165 1\u201364 \u7684\u6574\u6570\u3002" : "\u65E0\u6CD5\u8BFB\u53D6\u6216\u4FDD\u5B58\u8BBE\u7F6E\uFF0C\u8BF7\u68C0\u67E5\u672C\u673A\u8BBE\u7F6E\u6587\u4EF6\u540E\u91CD\u8BD5\u3002" });
+    });
+  });
+  server.requestTimeout = 1e4;
+  server.headersTimeout = 1e4;
+  server.maxHeadersCount = 32;
+  await new Promise((resolve10, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve10();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("Unable to start settings panel");
+  origin = `http://127.0.0.1:${address.port}`;
+  server.unref();
+  let closed = false;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    clearTimeout(timer);
+    await new Promise((resolve10) => {
+      server.close(() => resolve10());
+      server.closeAllConnections();
+    });
+  };
+  const timer = setTimeout(() => {
+    void close();
+  }, 15 * 6e4);
+  timer.unref();
+  const url = `${origin}/`;
+  try {
+    await (options.launch ?? launchBrowser)(`${url}#${secret}`);
+  } catch {
+    await close();
+    throw new Error("\u65E0\u6CD5\u6253\u5F00\u672C\u673A\u6D4F\u89C8\u5668\uFF0C\u8BF7\u68C0\u67E5\u9ED8\u8BA4\u6D4F\u89C8\u5668\u914D\u7F6E\u540E\u91CD\u8BD5\u3002");
+  }
+  return { url, expiresAt: new Date(expires).toISOString(), close };
+}
+
 // src/index.ts
 function createProjectDesignKeeper(options = {}) {
   const trustedApprovalProvider = options.trustedApprovalProvider;
-  const transactions = createTransactionService(options);
+  const settings = createSettingsStore(options);
+  const authority = createApplyApprovalAuthority(options.now ?? Date.now);
+  const operationOptions = async () => ({ ...options, runtimePolicy: freezeRuntimePolicy(await settings.read()) });
+  const transactionSnapshot = async () => createTransactionService(await operationOptions(), authority);
+  const transactions = {
+    previewUpdate: async (input) => (await transactionSnapshot()).previewUpdate(input),
+    inspectChangesetForApproval: async (input) => (await transactionSnapshot()).inspectChangesetForApproval(input),
+    issueApplyAuthorization: authority.issue,
+    applyUpdate: async (input, authorization, identity) => (await transactionSnapshot()).applyUpdate(input, authorization, identity),
+    readPreview: async (input) => (await transactionSnapshot()).readPreview(input)
+  };
+  const panels = /* @__PURE__ */ new Set();
+  let openingPanels = 0;
+  let settingsGeneration = 0;
+  const openSettings = async () => {
+    const generation = settingsGeneration;
+    for (const panel of panels) {
+      if (Date.parse(panel.expiresAt) <= Date.now()) {
+        await panel.close();
+        panels.delete(panel);
+      }
+    }
+    if (panels.size + openingPanels >= 4) throw new Error("\u6700\u591A\u540C\u65F6\u6253\u5F00\u56DB\u4E2A\u8BBE\u7F6E\u9762\u677F\uFF1B\u8BF7\u7B49\u5F85\u5DF2\u6709\u4F1A\u8BDD\u8FC7\u671F\u540E\u91CD\u8BD5\u3002");
+    openingPanels += 1;
+    try {
+      const panel = await openSettingsPanel(settings);
+      if (generation !== settingsGeneration) {
+        await panel.close();
+        throw new Error("\u8BBE\u7F6E\u4F1A\u8BDD\u5DF2\u5173\u95ED\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u3002");
+      }
+      panels.add(panel);
+      return {
+        url: panel.url,
+        expiresAt: panel.expiresAt,
+        opened: true,
+        message: "Keeper \u8BBE\u7F6E\u5DF2\u5728\u672C\u5730\u6D4F\u89C8\u5668\u6253\u5F00\u3002\u4FDD\u5B58\u540E\u4E0B\u4E00\u6B21\u64CD\u4F5C\u751F\u6548\u3002\u8BBE\u7F6E\u4F5C\u7528\u4E8E\u672C\u673A\u5F53\u524D\u7528\u6237\u7684 Keeper \u5B89\u88C5\u3002"
+      };
+    } finally {
+      openingPanels -= 1;
+    }
+  };
+  const closeSettings = async () => {
+    settingsGeneration += 1;
+    const closing = [...panels];
+    panels.clear();
+    await Promise.all(closing.map((panel) => panel.close()));
+  };
   const scope = createScopeService(options);
-  const validatePackWithOptions = (input) => validatePack(input, {
+  const validatePackWithOptions = async (input) => validatePack(input, {
     limits: options.limits,
-    io: options.validationIo
+    io: options.validationIo,
+    runtimePolicy: (await operationOptions()).runtimePolicy
   });
   const mcpService = {
     ...scope,
     queryHistory: (input) => queryHistory(input, options),
     analyzeRedundancy: (input) => analyzeRedundancy(input, options),
     validatePack: validatePackWithOptions,
+    getSettings: settings.read,
+    openSettings,
+    closeSettings,
     ...transactions
   };
   const applyUpdate = async (input) => {
-    if (!trustedApprovalProvider) {
-      throw new Error("Direct apply requires a trusted approval provider");
-    }
     const binding = await transactions.inspectChangesetForApproval(input);
-    const decision = await trustedApprovalProvider(binding);
-    if (decision?.approved !== true) throw new Error("Trusted approval provider declined the apply request");
+    if (!binding.policy?.easyMode) {
+      if (!trustedApprovalProvider) throw new Error("Direct apply requires a trusted approval provider");
+      const decision = await trustedApprovalProvider(binding);
+      if (decision?.approved !== true) throw new Error("Trusted approval provider declined the apply request");
+    }
     const requestIdentity = Object.freeze({ directApply: true });
     const authorization = transactions.issueApplyAuthorization(binding, requestIdentity);
     return transactions.applyUpdate(input, authorization, requestIdentity);
@@ -36668,6 +37304,10 @@ function createProjectDesignKeeper(options = {}) {
     previewUpdate: transactions.previewUpdate,
     inspectChangesetForApproval: transactions.inspectChangesetForApproval,
     applyUpdate,
+    getSettings: settings.read,
+    openSettings,
+    closeSettings,
+    readPreview: transactions.readPreview,
     createMcpServer: async () => createMcpServer(mcpService),
     connectStdioServer: async () => connectStdioServer(mcpService)
   };

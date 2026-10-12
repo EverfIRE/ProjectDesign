@@ -312,32 +312,38 @@ describe("preview persistence and path safety", () => {
     await expect(readdir(join(cache(), "changesets"))).resolves.toEqual([]);
   });
 
-  test("rejects a generated diff above 768 KiB before persisting either changeset half", async () => {
+  test("persists a generated diff above 768 KiB and returns a bounded first page", async () => {
     const api = await keeper();
 
-    await expect(api.previewUpdate({
+    const preview = await api.previewUpdate({
       root: project().repository,
       changes: [{
         path: ".agents/skills/project-design-context/oversized-diff.md",
         content: managedBlock("oversized-diff", "x".repeat(800 * 1024))
       }]
-    })).rejects.toThrow(/diff.*768/i);
-
-    await expect(readdir(join(cache(), "changesets"))).resolves.toEqual([]);
+    });
+    expect(preview.applicable).toBe(true);
+    expect(preview.complete).toBe(false);
+    expect(preview.nextCursor).toEqual(expect.any(String));
+    expect(Buffer.byteLength(JSON.stringify(preview))).toBeLessThan(1024 * 1024);
+    await expectChangesetPairPresent(preview.changesetId);
   });
 
-  test("rejects a complete preview result above one MiB before persisting either changeset half", async () => {
+  test("omits repeated content when the complete preview would exceed the result budget", async () => {
     const api = await keeper();
 
-    await expect(api.previewUpdate({
+    const preview = await api.previewUpdate({
       root: project().repository,
       changes: [{
         path: ".agents/skills/project-design-context/oversized-result.md",
         content: managedBlock("oversized-result", "y".repeat(600 * 1024))
       }]
-    })).rejects.toThrow(/one MiB|response budget/i);
-
-    await expect(readdir(join(cache(), "changesets"))).resolves.toEqual([]);
+    });
+    expect(preview.applicable).toBe(true);
+    expect(preview.complete).toBe(false);
+    expect(preview.changes).toEqual([expect.objectContaining({ contentOmitted: true })]);
+    expect(Buffer.byteLength(JSON.stringify(preview))).toBeLessThan(1024 * 1024);
+    await expectChangesetPairPresent(preview.changesetId);
   });
 
   test("persists a full changeset while returning a human-readable summary without project writes", async () => {

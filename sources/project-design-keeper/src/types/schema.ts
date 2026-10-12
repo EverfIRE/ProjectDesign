@@ -6,6 +6,7 @@ import { dirname, isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import { assessRecord, type EvidenceRef, type RecordLifecycle } from "../knowledge/model.js";
 import { CanonicalJsonLinesError, decodeCanonicalJsonLines } from "../knowledge/jsonl.js";
 import type { ChangesetApprovalBinding } from "../security/approval.js";
+import { managedReadLimits, type RuntimePolicy } from "../settings/policy.js";
 import {
   ByteBudget,
   CounterBudget,
@@ -314,6 +315,8 @@ export interface PackValidationIo {
 }
 
 export interface ServiceOptions {
+  /** Internal trusted operation snapshot; never populated from tool arguments. */
+  runtimePolicy?: import("../settings/policy.js").RuntimePolicy;
   cacheDirectory?: string;
   environment?: Record<string, string | undefined>;
   homeDirectory?: string;
@@ -385,7 +388,9 @@ export interface PersistedChange {
 }
 
 export interface PersistedChangeset {
-  version: 2;
+  version: 2 | 3;
+  policy?: import("../settings/policy.js").RuntimePolicy;
+  diff?: string;
   changesetId: string;
   root: string;
   createdAt: number;
@@ -729,6 +734,7 @@ interface ValidationDiagnostic {
 }
 
 export interface PackValidationOptions {
+  runtimePolicy?: RuntimePolicy;
   overlay?: ReadonlyMap<string, Buffer | undefined>;
   /** Overlay entries whose bytes were already charged to a shared caller budget. */
   preaccountedOverlay?: ReadonlySet<string>;
@@ -1056,11 +1062,16 @@ function managedBlocks(
   onMatch: () => void = () => undefined
 ): Array<{ id: string; declaredHash: string; content: string }> {
   const blocks: Array<{ id: string; declaredHash: string; content: string }> = [];
-  const expression = /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->([\s\S]*?)<!-- \/project-design-keeper:managed -->/gu;
+  const expression = /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->/gu;
+  const close = "<!-- /project-design-keeper:managed -->";
   let match: RegExpExecArray | null;
   while ((match = expression.exec(markdown)) !== null) {
+    const bodyStart = expression.lastIndex;
+    const bodyEnd = markdown.indexOf(close, bodyStart);
+    if (bodyEnd < 0) break;
+    expression.lastIndex = bodyEnd + close.length;
     onMatch();
-    blocks.push({ id: match[1], declaredHash: match[2], content: match[3] });
+    blocks.push({ id: match[1], declaredHash: match[2], content: markdown.slice(bodyStart, bodyEnd) });
   }
   return blocks;
 }
@@ -1070,11 +1081,16 @@ function derivedBlocks(
   onMatch: () => void = () => undefined
 ): Array<{ id: string; declaredHash: string; content: string }> {
   const blocks: Array<{ id: string; declaredHash: string; content: string }> = [];
-  const expression = /<!-- project-design-keeper:derived document-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->([\s\S]*?)<!-- \/project-design-keeper:derived -->/gu;
+  const expression = /<!-- project-design-keeper:derived document-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->/gu;
+  const close = "<!-- /project-design-keeper:derived -->";
   let match: RegExpExecArray | null;
   while ((match = expression.exec(markdown)) !== null) {
+    const bodyStart = expression.lastIndex;
+    const bodyEnd = markdown.indexOf(close, bodyStart);
+    if (bodyEnd < 0) break;
+    expression.lastIndex = bodyEnd + close.length;
     onMatch();
-    blocks.push({ id: match[1], declaredHash: match[2], content: match[3] });
+    blocks.push({ id: match[1], declaredHash: match[2], content: markdown.slice(bodyStart, bodyEnd) });
   }
   return blocks;
 }
@@ -1091,10 +1107,22 @@ function markdownLinks(markdown: string, onMatch: () => void = () => undefined):
 }
 
 function currentKnowledgeMarkdown(markdown: string, terminalRecordIds: ReadonlySet<string>): string {
-  return markdown.replace(
-    /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="sha256:[a-f0-9]{64}" -->([\s\S]*?)<!-- \/project-design-keeper:managed -->/gu,
-    (block, recordId: string) => terminalRecordIds.has(recordId) ? "" : block
-  );
+  const expression = /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="sha256:[a-f0-9]{64}" -->/gu;
+  const close = "<!-- /project-design-keeper:managed -->";
+  const retained: string[] = [];
+  let offset = 0;
+  let match: RegExpExecArray | null;
+  while ((match = expression.exec(markdown)) !== null) {
+    const bodyEnd = markdown.indexOf(close, expression.lastIndex);
+    if (bodyEnd < 0) break;
+    expression.lastIndex = bodyEnd + close.length;
+    if (terminalRecordIds.has(match[1])) {
+      retained.push(markdown.slice(offset, match.index));
+      offset = expression.lastIndex;
+    }
+  }
+  retained.push(markdown.slice(offset));
+  return retained.join("");
 }
 
 function normalizedStatement(statement: string): string {
@@ -1102,7 +1130,7 @@ function normalizedStatement(statement: string): string {
 }
 
 function createPackValidationBudget(options: PackValidationOptions): PackValidationBudget {
-  const limits = resolveKeeperLimits(options.limits);
+  const limits = resolveKeeperLimits(options.limits, options.runtimePolicy);
   const externalBudget = options.resourceBudget;
   if (externalBudget && (!Number.isSafeInteger(externalBudget.maxFileBytes) || externalBudget.maxFileBytes < 0)) {
     throw new Error("Pack validation shared file byte limit must be a non-negative integer");
@@ -1204,6 +1232,10 @@ export async function validatePack(
     return { valid: false, errors: [validationDiagnostic("root_invalid", "root", "The repository root cannot be resolved")], warnings: [] };
   }
   const overlay = new Map<string, Buffer | undefined>();
+  const managedFileBytes = options.runtimePolicy
+    ? Math.min(managedReadLimits.maxFileBytes, options.resourceBudget?.maxFileBytes ?? managedReadLimits.maxFileBytes,
+      options.limits?.scan?.maxFileBytes ?? Infinity)
+    : budget.maxFileBytes;
   const overlayPaths = new Map<string, string>();
   const preaccountedOverlay = new Set(
     [...(options.preaccountedOverlay ?? [])].map(windowsRepositoryPathKey)
@@ -1230,8 +1262,8 @@ export async function validatePack(
     const key = windowsRepositoryPathKey(path);
     accountFile(key);
     if (contents !== undefined) {
-      if (contents.byteLength > budget.maxFileBytes) {
-        throw new Error(`Pack validation file ${path} exceeds the limit of ${budget.maxFileBytes} bytes`);
+      if (contents.byteLength > managedFileBytes) {
+        throw new Error(`Pack validation file ${path} exceeds the limit of ${managedFileBytes} bytes`);
       }
       budget.bytes.consume(contents.byteLength);
       if (!preaccountedOverlay.has(key)) budget.externalBytes?.consume(contents.byteLength);
@@ -1361,8 +1393,9 @@ export async function validatePack(
     if (!Number.isSafeInteger(size) || size < 0) {
       throw new Error(`Pack validation file ${path} has an invalid byte length`);
     }
-    if (size > budget.maxFileBytes) {
-      throw new Error(`Pack validation file ${path} exceeds the limit of ${budget.maxFileBytes} bytes`);
+    const fileLimit = safeRepositoryPath(path, true) ? managedFileBytes : budget.maxFileBytes;
+    if (size > fileLimit) {
+      throw new Error(`Pack validation file ${path} exceeds the limit of ${fileLimit} bytes`);
     }
     let canonical: string;
     try {
@@ -1962,7 +1995,7 @@ export async function validatePack(
       try {
         lines = decodeCanonicalJsonLines(view.contents!, `Archive generation ${generation.path}`, {
           expectedCount: generation.recordCount,
-          maxBytes: Math.min(budget.maxFileBytes, keeperLimits.preview.maxFileBytes),
+          maxBytes: managedFileBytes,
           maxLines: Math.min(limits.pack.maxRecords, limits.scan.maxEvidence)
         });
       } catch (error) {
@@ -2039,7 +2072,7 @@ export async function validatePack(
         try {
           lines = decodeCanonicalJsonLines(view.contents!, `History tombstone ${tombstones.path}`, {
             expectedCount: tombstones.count,
-            maxBytes: Math.min(budget.maxFileBytes, keeperLimits.preview.maxFileBytes),
+            maxBytes: managedFileBytes,
             maxLines: Math.min(limits.pack.maxRecords, limits.scan.maxEvidence)
           });
         } catch (error) {
@@ -2267,7 +2300,9 @@ export const expiredPersistedChangesetV1Schema: z.ZodType<ExpiredPersistedChange
 });
 
 export const persistedChangesetSchema: z.ZodType<PersistedChangeset, z.ZodTypeDef, unknown> = z.object({
-  version: z.literal(2),
+  version: z.union([z.literal(2), z.literal(3)]),
+  policy: z.object({ revision: z.string().min(1).max(128), easyMode: z.boolean(), maxUpdateMiB: z.number().int().min(1).max(64) }).strict().optional(),
+  diff: z.string().optional(),
   changesetId: canonicalUuidSchema,
   root: z.string().min(1),
   createdAt: z.number().finite().int().nonnegative(),
@@ -2287,6 +2322,9 @@ export const persistedChangesetSchema: z.ZodType<PersistedChangeset, z.ZodTypeDe
   validatedPack: canonicalPackSchema.optional(),
   validationDependencyDigest: diffDigestSchema.optional()
 }).strict().superRefine((changeset, context) => {
+  if (changeset.version === 3 && (!changeset.policy || changeset.diff === undefined)) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ["policy"], message: "version three requires authenticated runtime policy and full diff" });
+  }
   if (changeset.sourceScope.root !== changeset.root) {
     context.addIssue({ code: z.ZodIssueCode.custom, path: ["sourceScope", "root"], message: "must equal the changeset root" });
   }

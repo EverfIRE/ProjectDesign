@@ -17,6 +17,8 @@ import {
   type SecurePathIdentity
 } from "../security/cache.js";
 import { keeperLimits, resolveKeeperLimits, type KeeperLimitOverrides } from "../security/limits.js";
+import type { RuntimePolicy } from "../settings/policy.js";
+import { canonicalJsonChunks, decodeStoredText, encodeStoredText } from "../security/text-storage.js";
 import {
   changesetLifetimeMs,
   expiredPersistedChangesetV1Schema,
@@ -134,7 +136,7 @@ export interface ChangesetStoreIo {
 
 export interface ChangesetStoreOptions extends Pick<
   ServiceOptions,
-  "cacheDirectory" | "environment" | "homeDirectory" | "now"
+  "cacheDirectory" | "environment" | "homeDirectory" | "now" | "runtimePolicy"
 > {
   limits?: KeeperLimitOverrides;
   io?: Partial<ChangesetStoreIo>;
@@ -182,26 +184,15 @@ function signaturePath(cache: SecureCacheLayout, changesetId: string): string {
   return join(cache.changesets, `${changesetId}.sig.json`);
 }
 
-function canonicalJson(value: unknown): string {
-  const normalize = (candidate: unknown): unknown => {
-    if (Array.isArray(candidate)) return candidate.map(normalize);
-    if (typeof candidate === "object" && candidate !== null) {
-      return Object.fromEntries(Object.entries(candidate as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right, "en-US"))
-        .map(([key, nested]) => [key, normalize(nested)]));
-    }
-    return candidate;
-  };
-  return JSON.stringify(normalize(value));
-}
-
 export function persistedDiffDigest(
   changes: PersistedChange[],
-  semanticDecisionIds: string[]
+  semanticDecisionIds: string[],
+  policy?: RuntimePolicy,
+  diff?: string
 ): `sha256:${string}` {
-  return `sha256:${createHash("sha256")
-    .update(canonicalJson({ changes, semanticDecisionIds }), "utf8")
-    .digest("hex")}`;
+  const hash = createHash("sha256");
+  for (const chunk of canonicalJsonChunks({ changes, semanticDecisionIds, ...(policy ? { policy, diff } : {}) })) hash.update(chunk, "utf8");
+  return `sha256:${hash.digest("hex")}`;
 }
 
 function projectDigest(root: string): string {
@@ -214,7 +205,9 @@ function bytesDigest(bytes: Buffer): string {
 }
 
 function changesetMac(key: Buffer, value: unknown): string {
-  return createHmac("sha256", key).update(canonicalJson(value), "utf8").digest("hex");
+  const mac = createHmac("sha256", key);
+  for (const chunk of canonicalJsonChunks(value)) mac.update(chunk, "utf8");
+  return mac.digest("hex");
 }
 
 function parseJson(bytes: Buffer, label: string): unknown {
@@ -394,7 +387,7 @@ async function readAuthenticatedPair(
   if (actual.byteLength !== expected.byteLength || !timingSafeEqual(actual, expected)) {
     throw new Error("Changeset signature authentication failed; cached data may have been tampered with");
   }
-  return { raw, changesetBytes, signatureBytes };
+  return { raw: decodeStoredText(raw), changesetBytes, signatureBytes };
 }
 
 function parseAuthenticatedVersionTwo(
@@ -415,7 +408,7 @@ function parseAuthenticatedVersionTwo(
   if (options.expectedRoot !== undefined && changeset.root !== options.expectedRoot) {
     throw new Error("Changeset root does not match the requested project root");
   }
-  if (persistedDiffDigest(changeset.changes, changeset.semanticDecisionIds) !== changeset.diffDigest) {
+  if (persistedDiffDigest(changeset.changes, changeset.semanticDecisionIds, changeset.policy, changeset.diff) !== changeset.diffDigest) {
     throw new Error("Persisted changeset diff digest does not match its authenticated changes");
   }
   return {
@@ -485,7 +478,7 @@ function quotaError(label: string, limit: number): Error {
 
 export function createChangesetStore(options: ChangesetStoreOptions = {}): ChangesetStore {
   const now = options.now ?? (() => Date.now());
-  const limits = resolveKeeperLimits(options.limits);
+  const limits = resolveKeeperLimits(options.limits, options.runtimePolicy);
   const io: ChangesetStoreIo = {
     publishFile: options.io?.publishFile ?? publishExclusiveFile,
     removeExactFile: options.io?.removeExactFile ?? safeRemoveExactCacheFile,
@@ -737,11 +730,12 @@ export function createChangesetStore(options: ChangesetStoreOptions = {}): Chang
 
   async function preparePublication(changeset: PersistedChangeset): Promise<PreparedChangesetPublication> {
     const parsed = parsePersistedChangeset(changeset);
-    if (persistedDiffDigest(parsed.changes, parsed.semanticDecisionIds) !== parsed.diffDigest) {
+    if (persistedDiffDigest(parsed.changes, parsed.semanticDecisionIds, parsed.policy, parsed.diff) !== parsed.diffDigest) {
       throw new Error("Persisted changeset diff digest does not match its authenticated changes");
     }
     if (now() >= parsed.expiresAt) throw new Error(`Changeset ${parsed.changesetId} has expired`);
-    const changesetBytes = Buffer.from(`${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+    const wire = parsed.version === 3 ? encodeStoredText(parsed) : parsed;
+    const changesetBytes = Buffer.from(`${JSON.stringify(wire, null, 2)}\n`, "utf8");
     if (changesetBytes.byteLength > limits.changesets.maxChangesetBytes) {
       throw new Error(`Persisted changeset exceeds the limit of ${limits.changesets.maxChangesetBytes} bytes`);
     }
@@ -751,7 +745,7 @@ export function createChangesetStore(options: ChangesetStoreOptions = {}): Chang
       version: 1,
       algorithm: "hmac-sha256",
       changesetId: parsed.changesetId,
-      mac: changesetMac(key, parsed)
+      mac: changesetMac(key, wire)
     };
     const signatureBytes = Buffer.from(`${JSON.stringify(signature, null, 2)}\n`, "utf8");
     if (signatureBytes.byteLength > limits.changesets.maxSignatureBytes) {

@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { freezeRuntimePolicy, maximumUpdateBytes, type RuntimePolicy } from "../settings/policy.js";
 
 export interface KeeperLimits {
   readonly mcpArgumentBytes: number;
@@ -60,8 +61,8 @@ export const keeperLimits: KeeperLimits = Object.freeze({
 export const changesetRemovalRecoveryLimits = Object.freeze({
   maxEntries: keeperLimits.changesets.maxPairsGlobal * 4,
   maxWork: keeperLimits.changesets.maxPairsGlobal * 16,
-  maxBytes: keeperLimits.changesets.maxTotalBytes,
-  maxArtifactBytes: keeperLimits.changesets.maxChangesetBytes,
+  maxBytes: 2 * 1024 * 1024 * 1024,
+  maxArtifactBytes: 512 * 1024 * 1024,
   deadlineMs: 30_000
 });
 
@@ -72,25 +73,31 @@ function cappedOverride(label: string, hardLimit: number, override: number | und
 }
 
 /** Resolve test overrides without allowing any effective production limit above its hard ceiling. */
-export function resolveKeeperLimits(overrides: KeeperLimitOverrides = {}): KeeperLimits {
+export function resolveKeeperLimits(overrides: KeeperLimitOverrides = {}, runtimePolicy?: RuntimePolicy): KeeperLimits {
+  const policy = runtimePolicy ? freezeRuntimePolicy(runtimePolicy) : undefined;
+  const writeBytes = policy ? policy.maxUpdateMiB * 1024 * 1024 : keeperLimits.preview.maxAggregateBytes;
+  // JSON can escape each content byte to six bytes. Managed operations may carry
+  // multiple final-file copies; metadata has its own allowance, not a write charge.
+  const argumentBytes = policy ? writeBytes * 12 + keeperLimits.mcpArgumentBytes : keeperLimits.mcpArgumentBytes;
+  const fileBytes = policy?.easyMode ? writeBytes : keeperLimits.preview.maxFileBytes;
   const preview = overrides.preview;
   const changesets = overrides.changesets;
   const pack = overrides.pack;
   const scan = overrides.scan;
   const redundancy = overrides.redundancy;
   return Object.freeze({
-    mcpArgumentBytes: cappedOverride("MCP argument bytes", keeperLimits.mcpArgumentBytes, overrides.mcpArgumentBytes),
+    mcpArgumentBytes: cappedOverride("MCP argument bytes", argumentBytes, overrides.mcpArgumentBytes),
     preview: Object.freeze({
       maxChanges: cappedOverride("Preview changes", keeperLimits.preview.maxChanges, preview?.maxChanges),
-      maxFileBytes: cappedOverride("Preview file bytes", keeperLimits.preview.maxFileBytes, preview?.maxFileBytes),
-      maxAggregateBytes: cappedOverride("Preview aggregate bytes", keeperLimits.preview.maxAggregateBytes, preview?.maxAggregateBytes),
+      maxFileBytes: cappedOverride("Preview file bytes", fileBytes, preview?.maxFileBytes),
+      maxAggregateBytes: cappedOverride("Preview aggregate bytes", writeBytes, preview?.maxAggregateBytes),
       maxDiffBytes: cappedOverride("Preview diff bytes", keeperLimits.preview.maxDiffBytes, preview?.maxDiffBytes)
     }),
     changesets: Object.freeze({
       maxPairsPerProject: cappedOverride("Changesets per project", keeperLimits.changesets.maxPairsPerProject, changesets?.maxPairsPerProject),
       maxPairsGlobal: cappedOverride("Global changesets", keeperLimits.changesets.maxPairsGlobal, changesets?.maxPairsGlobal),
-      maxTotalBytes: cappedOverride("Changeset cache bytes", keeperLimits.changesets.maxTotalBytes, changesets?.maxTotalBytes),
-      maxChangesetBytes: cappedOverride("Changeset bytes", keeperLimits.changesets.maxChangesetBytes, changesets?.maxChangesetBytes),
+      maxTotalBytes: cappedOverride("Changeset cache bytes", policy ? 2 * 1024 * 1024 * 1024 : keeperLimits.changesets.maxTotalBytes, changesets?.maxTotalBytes),
+      maxChangesetBytes: cappedOverride("Changeset bytes", policy ? maximumUpdateBytes * 8 : keeperLimits.changesets.maxChangesetBytes, changesets?.maxChangesetBytes),
       maxSignatureBytes: cappedOverride("Changeset signature bytes", keeperLimits.changesets.maxSignatureBytes, changesets?.maxSignatureBytes)
     }),
     pack: Object.freeze({

@@ -5,6 +5,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { TextDecoder } from "node:util";
 import { safeRepositoryPath, type ServiceOptions } from "../types/schema.js";
+import { managedReadLimits } from "../settings/policy.js";
 import {
   ByteBudget,
   CounterBudget,
@@ -205,14 +206,16 @@ async function readBoundedRepositoryFile(
   }
 }
 
-async function manifest(rootInput: string, budget: RedundancyReadBudget): Promise<{ root: string; bytes: Buffer; value: JsonObject }> {
+async function manifest(rootInput: string, budget: RedundancyReadBudget, maxFileBytes = managedReadLimits.maxFileBytes): Promise<{ root: string; bytes: Buffer; value: JsonObject }> {
   checkReadDeadline(budget);
   const root = await realpath(resolve(rootInput));
   checkReadDeadline(budget);
   const result = await readBoundedRepositoryFile(
     root,
     "docs/project-design/manifest.json",
-    budget,
+    // Manifest knowledge can be larger than source evidence. Only its per-file
+    // allowance changes; count, aggregate and deadline remain shared and bounded.
+    { ...budget, maxFileBytes },
     "The Keeper manifest",
     true
   );
@@ -575,7 +578,7 @@ export async function analyzeRedundancy(input: JsonObject, options: ServiceOptio
   if (typeof input.root !== "string") throw new Error("A repository root is required");
   const resolvedLimits = resolveKeeperLimits(options.limits);
   const budget = readBudget(resolvedLimits, options.redundancyIo);
-  const loaded = await manifest(input.root, budget);
+  const loaded = await manifest(input.root, budget, Math.min(managedReadLimits.maxFileBytes, options.limits?.scan?.maxFileBytes ?? Infinity));
   const limits = resolvedLimits.redundancy;
   const rawRecords = Array.isArray(loaded.value.records) ? loaded.value.records : [];
   if (rawRecords.length > limits.maxRecords) {

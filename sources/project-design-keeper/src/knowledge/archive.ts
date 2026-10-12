@@ -138,9 +138,12 @@ function equalJson(left: unknown, right: unknown): boolean {
 function managedBody(contents: Buffer | undefined, recordId: string): string | undefined {
   if (!contents) return undefined;
   const escaped = recordId.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-  const match = new RegExp(`<!-- project-design-keeper:managed record-id="${escaped}" content-hash="sha256:[a-f0-9]{64}" -->([\\s\\S]*?)<!-- \\/project-design-keeper:managed -->`, "u")
-    .exec(contents.toString("utf8"));
-  return match?.[1];
+  const text = contents.toString("utf8");
+  const match = new RegExp(`<!-- project-design-keeper:managed record-id="${escaped}" content-hash="sha256:[a-f0-9]{64}" -->`, "u").exec(text);
+  if (!match) return undefined;
+  const start = match.index + match[0].length;
+  const end = text.indexOf("<!-- /project-design-keeper:managed -->", start);
+  return end < 0 ? undefined : text.slice(start, end);
 }
 
 /**

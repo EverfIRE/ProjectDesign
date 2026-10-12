@@ -14,29 +14,75 @@ import { createTransactionService, resolveCacheDirectory } from "./transactions.
 import { validatePack, type ServiceOptions } from "./types/schema.js";
 import { queryHistory } from "./knowledge/history.js";
 import { analyzeRedundancy } from "./knowledge/redundancy.js";
+import { createApplyApprovalAuthority } from "./security/approval.js";
+import { createSettingsStore } from "./settings/store.js";
+import { openSettingsPanel, type SettingsPanel } from "./settings/panel.js";
+import { freezeRuntimePolicy } from "./settings/policy.js";
 
 export function createProjectDesignKeeper(options: ServiceOptions = {}) {
   const trustedApprovalProvider = options.trustedApprovalProvider;
-  const transactions = createTransactionService(options);
+  const settings = createSettingsStore(options);
+  const authority = createApplyApprovalAuthority(options.now ?? Date.now);
+  const operationOptions = async () => ({ ...options, runtimePolicy: freezeRuntimePolicy(await settings.read()) });
+  const transactionSnapshot = async () => createTransactionService(await operationOptions(), authority);
+  const transactions = {
+    previewUpdate: async (input: Record<string, unknown>) => (await transactionSnapshot()).previewUpdate(input),
+    inspectChangesetForApproval: async (input: Record<string, unknown>) => (await transactionSnapshot()).inspectChangesetForApproval(input),
+    issueApplyAuthorization: authority.issue,
+    applyUpdate: async (input: Record<string, unknown>, authorization?: Parameters<ReturnType<typeof createTransactionService>["applyUpdate"]>[1], identity?: object) =>
+      (await transactionSnapshot()).applyUpdate(input, authorization, identity),
+    readPreview: async (input: Record<string, unknown>) => (await transactionSnapshot()).readPreview(input)
+  };
+  const panels = new Set<SettingsPanel>();
+  let openingPanels = 0;
+  let settingsGeneration = 0;
+  const openSettings = async () => {
+    const generation = settingsGeneration;
+    for (const panel of panels) {
+      if (Date.parse(panel.expiresAt) <= Date.now()) { await panel.close(); panels.delete(panel); }
+    }
+    if (panels.size + openingPanels >= 4) throw new Error("最多同时打开四个设置面板；请等待已有会话过期后重试。");
+    openingPanels += 1;
+    try {
+      const panel = await openSettingsPanel(settings);
+      if (generation !== settingsGeneration) {
+        await panel.close();
+        throw new Error("设置会话已关闭，请重新打开。");
+      }
+      panels.add(panel);
+      return { url: panel.url, expiresAt: panel.expiresAt, opened: true,
+        message: "Keeper 设置已在本地浏览器打开。保存后下一次操作生效。设置作用于本机当前用户的 Keeper 安装。" };
+    } finally { openingPanels -= 1; }
+  };
+  const closeSettings = async () => {
+    settingsGeneration += 1;
+    const closing = [...panels];
+    panels.clear();
+    await Promise.all(closing.map(panel => panel.close()));
+  };
   const scope = createScopeService(options);
-  const validatePackWithOptions = (input: Record<string, unknown>) => validatePack(input, {
+  const validatePackWithOptions = async (input: Record<string, unknown>) => validatePack(input, {
     limits: options.limits,
-    io: options.validationIo
+    io: options.validationIo,
+    runtimePolicy: (await operationOptions()).runtimePolicy
   });
   const mcpService = {
     ...scope,
     queryHistory: (input: Record<string, unknown>) => queryHistory(input, options),
     analyzeRedundancy: (input: Record<string, unknown>) => analyzeRedundancy(input, options),
     validatePack: validatePackWithOptions,
+    getSettings: settings.read,
+    openSettings,
+    closeSettings,
     ...transactions
   };
   const applyUpdate = async (input: Record<string, unknown>) => {
-    if (!trustedApprovalProvider) {
-      throw new Error("Direct apply requires a trusted approval provider");
-    }
     const binding = await transactions.inspectChangesetForApproval(input);
-    const decision = await trustedApprovalProvider(binding);
-    if (decision?.approved !== true) throw new Error("Trusted approval provider declined the apply request");
+    if (!binding.policy?.easyMode) {
+      if (!trustedApprovalProvider) throw new Error("Direct apply requires a trusted approval provider");
+      const decision = await trustedApprovalProvider(binding);
+      if (decision?.approved !== true) throw new Error("Trusted approval provider declined the apply request");
+    }
     const requestIdentity = Object.freeze({ directApply: true });
     const authorization = transactions.issueApplyAuthorization(binding, requestIdentity);
     return transactions.applyUpdate(input, authorization, requestIdentity);
@@ -49,6 +95,10 @@ export function createProjectDesignKeeper(options: ServiceOptions = {}) {
     previewUpdate: transactions.previewUpdate,
     inspectChangesetForApproval: transactions.inspectChangesetForApproval,
     applyUpdate,
+    getSettings: settings.read,
+    openSettings,
+    closeSettings,
+    readPreview: transactions.readPreview,
     createMcpServer: async () => createMcpServer(mcpService),
     connectStdioServer: async () => connectStdioServer(mcpService)
   };

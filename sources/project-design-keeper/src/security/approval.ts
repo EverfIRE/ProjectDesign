@@ -1,4 +1,8 @@
+import type { RuntimePolicy } from "../settings/policy.js";
+
 export interface ChangesetApprovalBinding {
+  policy?: RuntimePolicy;
+  authorizationSource?: "easy-policy" | "human-form";
   root: string;
   changesetId: string;
   diffDigest: `sha256:${string}`;
@@ -39,6 +43,8 @@ interface AuthorizationRecord {
 
 function snapshotBinding(binding: ChangesetApprovalBinding): ChangesetApprovalBinding {
   return {
+    ...(binding.policy ? { policy: { ...binding.policy } } : {}),
+    ...(binding.authorizationSource ? { authorizationSource: binding.authorizationSource } : {}),
     root: binding.root,
     changesetId: binding.changesetId,
     diffDigest: binding.diffDigest,
@@ -58,7 +64,11 @@ function equalStrings(left: string[], right: string[]): boolean {
 }
 
 function equalBindings(left: ChangesetApprovalBinding, right: ChangesetApprovalBinding): boolean {
-  return left.root === right.root &&
+  return left.policy?.revision === right.policy?.revision &&
+    left.policy?.easyMode === right.policy?.easyMode &&
+    left.policy?.maxUpdateMiB === right.policy?.maxUpdateMiB &&
+    left.authorizationSource === right.authorizationSource &&
+    left.root === right.root &&
     left.changesetId === right.changesetId &&
     left.diffDigest === right.diffDigest &&
     left.expiresAt === right.expiresAt &&

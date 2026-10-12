@@ -15,6 +15,7 @@ import {
   type ScopeCursorPayload
 } from "../security/cursor.js";
 import { ByteBudget, CounterBudget, DeadlineBudget, resolveKeeperLimits } from "../security/limits.js";
+import { managedReadLimits } from "../settings/policy.js";
 import { pageItems, scanLimit, scanView } from "./pagination.js";
 import { readIndexedFile } from "./reader.js";
 import {
@@ -1340,8 +1341,11 @@ async function readBoundedRepositoryMetadata(
   const size = Number(initial.size);
   if (!Number.isSafeInteger(size) || size < 0) throw new Error("Scope metadata file has an invalid byte length");
   budget.repositoryFiles.consume();
-  if (size > budget.maxFileBytes) {
-    throw new Error(`Scope metadata file bytes exceed the per-file limit of ${budget.maxFileBytes}`);
+  // This reader is only used after routing a manifest or managed pack document.
+  // Source scans retain budget.maxFileBytes; explicit lower test budgets still apply.
+  const maxFileBytes = Math.min(managedReadLimits.maxFileBytes, options.limits?.scan?.maxFileBytes ?? Infinity);
+  if (size > maxFileBytes) {
+    throw new Error(`Scope metadata file bytes exceed the per-file limit of ${maxFileBytes}`);
   }
   budget.repositoryBytes.consume(size);
   await runBeforeRepositoryContentHook(options, lexicalPath, budget);
@@ -1443,10 +1447,17 @@ async function safeDocumentRoute(
   if (!bytes) return undefined;
   try {
     const markdown = decodeFatalUtf8(bytes);
-    const expression = /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->([\s\S]*?)<!-- \/project-design-keeper:managed -->/gu;
-    const recordIds = new Set([...markdown.matchAll(expression)].flatMap((match) =>
-      sha256(Buffer.from(match[3], "utf8")) === match[2] ? [match[1]] : []
-    ));
+    const expression = /<!-- project-design-keeper:managed record-id="([A-Za-z0-9][A-Za-z0-9._:-]*)" content-hash="(sha256:[a-f0-9]{64})" -->/gu;
+    const close = "<!-- /project-design-keeper:managed -->";
+    const recordIds = new Set<string>();
+    for (let match = expression.exec(markdown); match; match = expression.exec(markdown)) {
+      const start = expression.lastIndex;
+      const end = markdown.indexOf(close, start);
+      if (end < 0) break;
+      budget.deadline.check();
+      if (sha256(Buffer.from(markdown.slice(start, end), "utf8")) === match[2]) recordIds.add(match[1]);
+      expression.lastIndex = end + close.length;
+    }
     return { document, recordIds };
   } catch {
     return undefined;

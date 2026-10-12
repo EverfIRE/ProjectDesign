@@ -8,10 +8,11 @@ import {
   assertStringWithin,
   assertToolResultBudget,
   keeperLimits,
+  resolveKeeperLimits,
   mcpToolResultBudgetBytes
 } from "./security/limits.js";
 
-export const serverInstructions = "Safe sequence: scan/search -> preview -> show diff/conflicts -> obtain explicit user confirmation -> apply the unexpired change-set. Never treat preview as approval. Use query_context to load only task-relevant design context, detect_drift before refreshes, and validate_pack before presenting completion.";
+export const serverInstructions = "Read get_settings for current policy. Safe sequence: scan/search -> preview -> inspect diff/conflicts (read_preview pages when incomplete) -> apply the unexpired change-set. Normal mode requires explicit user confirmation. Saved Easy mode skips Keeper human confirmation only; all automatic validation still applies. Never enable Easy to work around errors. Use open_settings only when the user requests settings. Use query_context for relevant context, detect_drift before refreshes, and validate_pack before completion.";
 
 export interface McpKeeperService {
   scanScope(input: Record<string, unknown>): Promise<object>;
@@ -25,6 +26,10 @@ export interface McpKeeperService {
   issueApplyAuthorization(binding: ChangesetApprovalBinding, requestIdentity: object): ApplyAuthorization;
   applyUpdate(input: Record<string, unknown>, authorization?: ApplyAuthorization, requestIdentity?: object): Promise<object>;
   validatePack(input: Record<string, unknown>): Promise<object>;
+  getSettings?(): Promise<{ easyMode: boolean; maxUpdateMiB: number; revision: string }>;
+  openSettings?(): Promise<object>;
+  readPreview?(input: Record<string, unknown>): Promise<object>;
+  closeSettings?(): Promise<void>;
 }
 
 function boundedString(maxBytes: number, minimum = 0) {
@@ -40,7 +45,9 @@ function boundedString(maxBytes: number, minimum = 0) {
 const nonemptyString = boundedString(4 * 1024, 1);
 const nonemptyQuery = boundedString(32 * 1024, 1);
 const queryString = boundedString(32 * 1024);
-const proposedFileContent = boundedString(keeperLimits.preview.maxFileBytes);
+// The configured policy is enforced against final merged files in transactions.
+// This schema is only the absolute wire ceiling, shared by all settings snapshots.
+const proposedFileContent = boundedString(64 * 1024 * 1024);
 const fingerprint = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
 const fingerprintRecord = z.record(fingerprint);
 const snapshotInput = z.union([
@@ -202,18 +209,27 @@ function requireApplyChangeset(input: Record<string, unknown>): void {
   if (!input.changesetId && !adapter?.changesetId) throw new Error("A changeset id is required");
 }
 
-function previewOperation(operation: (input: Record<string, unknown>) => Promise<object>) {
+function previewOperation(service: McpKeeperService) {
   return async (input: Record<string, unknown>): Promise<object> => {
+    const settings = await service.getSettings?.();
+    assertSerializedWithin("MCP arguments", input, resolveKeeperLimits({}, settings).mcpArgumentBytes);
     const changes = input.changes as Array<Record<string, unknown>>;
     const totalBytes = changes.reduce((total, change) => {
       if (typeof change.content === "string") return total + Buffer.byteLength(change.content, "utf8");
       const managedBlock = change.managedBlock as Record<string, unknown> | undefined;
       return total + (typeof managedBlock?.content === "string" ? Buffer.byteLength(managedBlock.content, "utf8") : 0);
     }, 0);
-    if (totalBytes > keeperLimits.preview.maxAggregateBytes) {
-      throw new Error(`Proposed file content exceeds the aggregate limit of ${keeperLimits.preview.maxAggregateBytes} bytes`);
+    const aggregateLimit = (settings?.maxUpdateMiB ?? 8) * 1024 * 1024;
+    const fileLimit = settings?.easyMode ? aggregateLimit : keeperLimits.preview.maxFileBytes;
+    for (const change of changes) {
+      const block = change.managedBlock as Record<string, unknown> | undefined;
+      const content = change.content ?? block?.content;
+      if (typeof content === "string") assertStringWithin("Proposed file content", content, fileLimit);
     }
-    return operation(input);
+    if (totalBytes > aggregateLimit) {
+      throw new Error(`Proposed file content exceeds the aggregate limit of ${aggregateLimit} bytes`);
+    }
+    return packOperation(service.previewUpdate)(input);
   };
 }
 
@@ -276,7 +292,7 @@ function registerTool(
 ): void {
   server.registerTool(name, { description, inputSchema, annotations }, async (input) => {
     try {
-      assertSerializedWithin("MCP arguments", input, 8 * 1024 * 1024);
+      if (name !== "preview_update" && name !== "validate_pack") assertSerializedWithin("MCP arguments", input, 8 * 1024 * 1024);
       return toolResult(await operation(input as Record<string, unknown>) as Record<string, unknown>);
     } catch (error) {
       return toolError(error);
@@ -343,7 +359,7 @@ function validateElicitationApproval(
 
 function registerApplyTool(server: McpServer, service: McpKeeperService): void {
   server.registerTool("apply_update", {
-    description: "Apply one explicitly confirmed, unexpired change-set with optimistic concurrency and recovery snapshots.",
+    description: "Apply one unexpired change-set under its saved policy: human confirmation in normal mode, automatic authorization in Easy mode. All validation and recovery checks remain.",
     inputSchema: applyInput,
     annotations: applyAnnotations
   }, async (input, extra) => {
@@ -351,37 +367,40 @@ function registerApplyTool(server: McpServer, service: McpKeeperService): void {
       assertSerializedWithin("MCP arguments", input, 8 * 1024 * 1024);
       const applyInputValue = input as Record<string, unknown>;
       requireApplyChangeset(applyInputValue);
-      if (server.server.getClientCapabilities()?.elicitation?.form === undefined) {
-        throw new Error("The connected client must support form elicitation for apply approval");
-      }
       const binding = await service.inspectChangesetForApproval(applyInputValue);
       const requestIdentity = approvalRequestIdentity(extra);
-      const message = approvalMessage(binding);
-      const result = await server.server.elicitInput({
-        mode: "form",
-        message,
-        requestedSchema: {
-          type: "object",
-          properties: {
-            decision: {
-              type: "string", enum: ["approve"], title: "Approve changeset",
-              description: "Select approve only after reviewing the full preview_update diff."
-            },
-            confirmation: {
-              type: "string", minLength: 8, maxLength: 8,
-              title: `Confirmation code: ${binding.diffDigest.slice(-8)}`,
-              description: "Type the eight hexadecimal characters shown above to confirm this changeset."
-            }
-          },
-          required: ["decision", "confirmation"]
+      if (!binding.policy?.easyMode) {
+        if (server.server.getClientCapabilities()?.elicitation?.form === undefined) {
+          throw new Error("The connected client must support form elicitation for apply approval");
         }
-      }, {
-        signal: extra.signal,
-        relatedRequestId: extra.requestId,
-        timeout: 60_000
-      });
+        const message = approvalMessage(binding);
+        const result = await server.server.elicitInput({
+          mode: "form",
+          message,
+          requestedSchema: {
+            type: "object",
+            properties: {
+              decision: {
+                type: "string", enum: ["approve"], title: "Approve changeset",
+                description: "Select approve only after reviewing the full preview_update diff."
+              },
+              confirmation: {
+                type: "string", minLength: 8, maxLength: 8,
+                title: `Confirmation code: ${binding.diffDigest.slice(-8)}`,
+                description: "Type the eight hexadecimal characters shown above to confirm this changeset."
+              }
+            },
+            required: ["decision", "confirmation"]
+          }
+        }, {
+          signal: extra.signal,
+          relatedRequestId: extra.requestId,
+          timeout: 60_000
+        });
+        extra.signal.throwIfAborted();
+        validateElicitationApproval(result, binding.diffDigest.slice(-8));
+      }
       extra.signal.throwIfAborted();
-      validateElicitationApproval(result, binding.diffDigest.slice(-8));
       const authorization = service.issueApplyAuthorization(binding, requestIdentity);
       return toolResult(await service.applyUpdate(
         applyInputValue,
@@ -396,7 +415,7 @@ function registerApplyTool(server: McpServer, service: McpKeeperService): void {
 
 export function createMcpServer(service: McpKeeperService): McpServer {
   const server = new McpServer(
-    { name: "project-design-keeper", version: "1.0.3" },
+    { name: "project-design-keeper", version: "1.1.0" },
     { instructions: serverInstructions }
   );
 
@@ -406,9 +425,26 @@ export function createMcpServer(service: McpKeeperService): McpServer {
   registerTool(server, "query_context", "Return the smallest relevant design context for a task, path, or module.", contextInput, readOnlyAnnotations, scopedOperation(service.queryContext));
   registerTool(server, "query_history", "Query stale, terminal, archived, and optionally tombstoned project-design knowledge.", historyInput, readOnlyAnnotations, service.queryHistory);
   registerTool(server, "analyze_redundancy", "Find deterministic semantic-redundancy candidates for explicit Agent and user decisions.", redundancyInput, readOnlyAnnotations, service.analyzeRedundancy);
-  registerTool(server, "preview_update", "Validate a proposed managed update, store an expiring change-set in keeper cache, and return its diff and conflicts without changing the project.", previewInput, previewAnnotations, previewOperation(packOperation(service.previewUpdate)));
+  registerTool(server, "preview_update", "Validate a proposed managed update, store an expiring change-set in keeper cache, and return its diff and conflicts without changing the project. Read remaining diff pages with read_preview when incomplete.", previewInput, previewAnnotations, previewOperation(service));
   registerApplyTool(server, service);
-  registerTool(server, "validate_pack", "Validate a project-design knowledge pack, links, records, evidence, and ownership metadata.", validateInput, readOnlyAnnotations, packOperation(service.validatePack));
+  registerTool(server, "validate_pack", "Validate a project-design knowledge pack, links, records, evidence, and ownership metadata.", validateInput, readOnlyAnnotations, async input => {
+    assertSerializedWithin("MCP arguments", input, resolveKeeperLimits({}, await service.getSettings?.()).mcpArgumentBytes);
+    return packOperation(service.validatePack)(input);
+  });
+  registerTool(server, "get_settings", "Read the saved Keeper mode, aggregate update limit and settings revision. Does not change settings.", z.object({}).strict(), readOnlyAnnotations, async () => {
+    if (!service.getSettings) throw new Error("Settings are unavailable in this service");
+    return service.getSettings();
+  });
+  registerTool(server, "open_settings", "Open the clickable local Keeper settings panel when the user requests settings. The user saves changes in their browser; never change settings to bypass errors.", z.object({}).strict(), previewAnnotations, async () => {
+    if (!service.openSettings) throw new Error("Settings panel is unavailable in this service");
+    return service.openSettings();
+  });
+  registerTool(server, "read_preview", "Read the complete authenticated diff in bounded pages. Continue nextCursor until complete before normal-mode approval.", z.object({ root: nonemptyString, changesetId: nonemptyString, cursor: nonemptyString.optional() }).strict(), readOnlyAnnotations, async input => {
+    if (!service.readPreview) throw new Error("Preview pagination is unavailable in this service");
+    return service.readPreview(input);
+  });
+  const originalClose = server.close.bind(server);
+  server.close = async () => { await service.closeSettings?.(); await originalClose(); };
   return server;
 }
 

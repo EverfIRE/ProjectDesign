@@ -842,7 +842,7 @@ describe("bounded complete-history loading", () => {
   test("rejects an archive file above the hard per-file budget", async () => {
     const state = createHistoryState();
     const entry = generationEntry(state);
-    entry.managedBody = "x".repeat(2 * 1024 * 1024);
+    entry.managedBody = "x".repeat(64 * 1024 * 1024);
     entry.contentHash = hash(String(entry.managedBody));
     await persistHistoryState(state);
 

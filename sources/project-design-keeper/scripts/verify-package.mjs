@@ -218,8 +218,8 @@ if (pluginManifest.name !== "project-design-keeper" || packageManifest.name !== 
 if (Object.hasOwn(packageManifest, "scripts") || Object.hasOwn(packageManifest, "devDependencies")) {
   throw new Error("Runtime package metadata must not expose unavailable development scripts or dependencies");
 }
-if (pluginManifest.version !== "1.0.3" || packageManifest.version !== "1.0.3") {
-  throw new Error("Package metadata versions must both equal 1.0.3");
+if (pluginManifest.version !== "1.1.0" || packageManifest.version !== "1.1.0") {
+  throw new Error("Package metadata versions must both equal 1.1.0");
 }
 if (pluginManifest.skills !== "./skills/" || pluginManifest.mcpServers !== "./.mcp.json") {
   throw new Error("Plugin manifest package roots are invalid");
