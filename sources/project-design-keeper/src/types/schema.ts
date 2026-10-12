@@ -749,7 +749,7 @@ export interface PackValidationResourceBudget {
   readonly maxFileBytes: number;
   readonly files: CounterBudget;
   readonly bytes: ByteBudget;
-  readonly deadline: DeadlineBudget;
+  readonly deadline: Pick<DeadlineBudget, "check">;
   /** Optional operation-wide validation counters reused by repeated validation passes. */
   readonly analysisBytes?: ByteBudget;
   readonly work?: CounterBudget;

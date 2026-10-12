@@ -68,6 +68,27 @@ function ownedJson(value: unknown): string {
   return `${JSON.stringify({ managedBy: "project-design-keeper", schemaVersion: "1.0", value }, null, 2)}\n`;
 }
 
+test("rolls back earlier outputs when the complete apply validation deadline expires", async () => {
+  const paths = ["first", "second"].map((name) => `.agents/skills/project-design-context/${name}.json`);
+  let reachedSecondOutput = false;
+  const api = await keeper({
+    limits: { scan: { deadlineMs: 1000 } },
+    beforeMutationRename: async (path: string) => {
+      if (path !== paths[1]) return;
+      await expect(readFile(join(project().repository, paths[0]), "utf8")).resolves.toBe(ownedJson("first"));
+      reachedSecondOutput = true;
+      // Two outputs permit four validation passes, each bounded to one second.
+      await delay(4200);
+    }
+  });
+  const preview = await api.previewUpdate({ root: project().repository,
+    changes: paths.map((path, index) => ({ path, content: ownedJson(index === 0 ? "first" : "second") })) });
+  await expect(api.applyUpdate({ root: project().repository, changesetId: preview.changesetId }))
+    .rejects.toThrow(/Apply validation deadline/);
+  expect(reachedSecondOutput).toBe(true);
+  for (const path of paths) await expect(lstat(join(project().repository, path))).rejects.toMatchObject({ code: "ENOENT" });
+}, 15000);
+
 function canonicalPack(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const requiredDocuments = [
     "index.md",
@@ -787,7 +808,7 @@ describe("optimistic concurrency", () => {
     expect(stored.validatedPack.records[0].statement).toBe(originalStatement);
   });
 
-  test("shares candidate-validation work across repeated pre-mutation checks", async () => {
+  test("allows each bounded pre-mutation validation pass its own work allowance", async () => {
     const pack = await writeCanonicalPackFixture(project());
     await writeFile(
       join(project().repository, "docs", "project-design", "manifest.json"),
@@ -806,11 +827,10 @@ describe("optimistic concurrency", () => {
     expect(preview).toMatchObject({ applicable: true, changesetId: expect.any(String) });
 
     await expect(api.applyUpdate({ root: project().repository, changesetId: preview.changesetId }))
-      .rejects.toThrow(/apply candidate validation work.*500 items/i);
-    await expectChangesetPairPresent(preview.changesetId);
+      .resolves.toMatchObject({ applied: true });
   });
 
-  test("shares candidate-validation analysis bytes across repeated pre-mutation checks", async () => {
+  test("allows repeated validation analysis without charging it as new input bytes", async () => {
     const pack = await writeCanonicalPackFixture(project());
     await writeFile(
       join(project().repository, "docs", "project-design", "manifest.json"),
@@ -829,8 +849,7 @@ describe("optimistic concurrency", () => {
     expect(preview).toMatchObject({ applicable: true, conflicts: [], changesetId: expect.any(String) });
 
     await expect(api.applyUpdate({ root: project().repository, changesetId: preview.changesetId }))
-      .rejects.toThrow(/apply candidate validation analysis.*25[ ,]?600 bytes/i);
-    await expectChangesetPairPresent(preview.changesetId);
+      .resolves.toMatchObject({ applied: true });
   });
 
   test("source concurrency ignores both generated output roots", async () => {

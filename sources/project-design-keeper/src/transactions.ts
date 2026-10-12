@@ -2822,23 +2822,24 @@ export function createTransactionService(options: ServiceOptions = {}, sharedApp
           if (!candidate.allowed) throw new Error(`New output lacks Keeper ownership/schema: ${change.path}`);
         }
       }
-      const dependencyReads = projectFileReadBudget(
-        "Apply dependency file reads",
-        readFileBytes,
-        readAggregateBytes,
-        limits.scan.maxFiles,
-        limits.scan.deadlineMs
+      // One initial check, one after staging hooks, then one before each output.
+      // A single-pass input ceiling must not be spent again as if rereading the
+      // same authenticated input introduced new project data. Bound both each
+      // pass and the complete, finite verification schedule instead.
+      const maximumValidationPasses = changeset.changes.length + 2;
+      const validationPasses = new CounterBudget("Apply validation passes", maximumValidationPasses);
+      const validationDeadline = new DeadlineBudget(
+        "Apply validation", Math.min(5 * 60_000, limits.scan.deadlineMs * maximumValidationPasses)
       );
-      const exactSourceReads = changeset.sourcePaths ? createExactSourceReadBudget(limits) : undefined;
-      const scopedSourceReads = changeset.sourcePaths ? undefined : createScopeOperationBudget(options);
       const validationOverlay = changeset.validatedPack ? new Map<string, Buffer | undefined>() : undefined;
+      let validationOverlayBytes = 0;
       if (validationOverlay) {
         for (const change of changeset.changes) {
           const contents = change.delete ? undefined : Buffer.from(change.content!, "utf8");
-          if (contents && contents.byteLength > dependencyReads.maxFileBytes) {
-            throw new Error(`Apply validation overlay exceeds the per-file limit of ${dependencyReads.maxFileBytes} bytes: ${change.path}`);
+          if (contents && contents.byteLength > readFileBytes) {
+            throw new Error(`Apply validation overlay exceeds the per-file limit of ${readFileBytes} bytes: ${change.path}`);
           }
-          if (contents) dependencyReads.aggregate.consume(contents.byteLength);
+          validationOverlayBytes += contents?.byteLength ?? 0;
           validationOverlay.set(change.path, contents);
         }
       }
@@ -2847,24 +2848,33 @@ export function createTransactionService(options: ServiceOptions = {}, sharedApp
         : undefined;
       const validationAnalysisBytes = new ByteBudget(
         "Apply candidate validation analysis",
-        limits.scan.maxAggregateBytes
+        limits.scan.maxAggregateBytes * maximumValidationPasses
       );
-      const validationWork = new CounterBudget("Apply candidate validation work", limits.scan.maxEvidence);
+      const validationWork = new CounterBudget("Apply candidate validation work", limits.scan.maxEvidence * maximumValidationPasses);
       const validationManagedEntries = new CounterBudget(
         "Apply candidate validation managed-tree entries",
-        Math.min(limits.scan.maxFiles, 4_096)
+        Math.min(limits.scan.maxFiles, 4_096) * maximumValidationPasses
       );
-      const validationResources = {
-        maxFileBytes: dependencyReads.maxFileBytes,
-        files: dependencyReads.files,
-        bytes: dependencyReads.aggregate,
-        deadline: dependencyReads.deadline,
-        analysisBytes: validationAnalysisBytes,
-        work: validationWork,
-        managedEntries: validationManagedEntries,
-        accountedFiles: dependencyReads.accountedFiles
-      };
       const verifyManifestAndSource = async () => {
+        validationPasses.consume();
+        validationDeadline.check();
+        const dependencyReads = projectFileReadBudget(
+          "Apply dependency file reads", readFileBytes, readAggregateBytes,
+          limits.scan.maxFiles, limits.scan.deadlineMs
+        );
+        dependencyReads.aggregate.consume(validationOverlayBytes);
+        const exactSourceReads = changeset.sourcePaths ? createExactSourceReadBudget(limits) : undefined;
+        const scopedSourceReads = changeset.sourcePaths ? undefined : createScopeOperationBudget(options);
+        const validationResources = {
+          maxFileBytes: dependencyReads.maxFileBytes,
+          files: dependencyReads.files,
+          bytes: dependencyReads.aggregate,
+          deadline: { check: () => { dependencyReads.deadline.check(); validationDeadline.check(); } },
+          analysisBytes: validationAnalysisBytes,
+          work: validationWork,
+          managedEntries: validationManagedEntries,
+          accountedFiles: dependencyReads.accountedFiles
+        };
         await lease.assertOwned();
         if (await manifestFingerprint(changeset.root, dependencyReads) !== changeset.manifestHash) {
           throw new Error("Project design manifest is stale");
@@ -2895,6 +2905,7 @@ export function createTransactionService(options: ServiceOptions = {}, sharedApp
             throw new Error("Candidate pack validation dependency is stale");
           }
         }
+        validationDeadline.check();
       };
       await verifyManifestAndSource();
       await storeRecoverySnapshot(loaded.cache, changeset, now(), {

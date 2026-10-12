@@ -30974,7 +30974,7 @@ function registerApplyTool(server, service) {
 }
 function createMcpServer(service) {
   const server = new McpServer(
-    { name: "project-design-keeper", version: "1.1.0" },
+    { name: "project-design-keeper", version: "1.1.1" },
     { instructions: serverInstructions }
   );
   registerTool(server, "scan_scope", "Scan a repository scope and return a bounded summary or cursor-paged files/evidence for an immutable snapshot.", scanInput, readOnlyAnnotations, scopedOperation(service.scanScope));
@@ -36542,47 +36542,60 @@ function createTransactionService(options = {}, sharedApprovalAuthority) {
           if (!candidate.allowed) throw new Error(`New output lacks Keeper ownership/schema: ${change.path}`);
         }
       }
-      const dependencyReads = projectFileReadBudget(
-        "Apply dependency file reads",
-        readFileBytes,
-        readAggregateBytes,
-        limits.scan.maxFiles,
-        limits.scan.deadlineMs
+      const maximumValidationPasses = changeset.changes.length + 2;
+      const validationPasses = new CounterBudget("Apply validation passes", maximumValidationPasses);
+      const validationDeadline = new DeadlineBudget(
+        "Apply validation",
+        Math.min(5 * 6e4, limits.scan.deadlineMs * maximumValidationPasses)
       );
-      const exactSourceReads = changeset.sourcePaths ? createExactSourceReadBudget(limits) : void 0;
-      const scopedSourceReads = changeset.sourcePaths ? void 0 : createScopeOperationBudget(options);
       const validationOverlay = changeset.validatedPack ? /* @__PURE__ */ new Map() : void 0;
+      let validationOverlayBytes = 0;
       if (validationOverlay) {
         for (const change of changeset.changes) {
           const contents = change.delete ? void 0 : Buffer.from(change.content, "utf8");
-          if (contents && contents.byteLength > dependencyReads.maxFileBytes) {
-            throw new Error(`Apply validation overlay exceeds the per-file limit of ${dependencyReads.maxFileBytes} bytes: ${change.path}`);
+          if (contents && contents.byteLength > readFileBytes) {
+            throw new Error(`Apply validation overlay exceeds the per-file limit of ${readFileBytes} bytes: ${change.path}`);
           }
-          if (contents) dependencyReads.aggregate.consume(contents.byteLength);
+          validationOverlayBytes += contents?.byteLength ?? 0;
           validationOverlay.set(change.path, contents);
         }
       }
       const validationOverlayKeys = validationOverlay ? new Set([...validationOverlay.keys()].map(windowsRepositoryPathKey)) : void 0;
       const validationAnalysisBytes = new ByteBudget(
         "Apply candidate validation analysis",
-        limits.scan.maxAggregateBytes
+        limits.scan.maxAggregateBytes * maximumValidationPasses
       );
-      const validationWork = new CounterBudget("Apply candidate validation work", limits.scan.maxEvidence);
+      const validationWork = new CounterBudget("Apply candidate validation work", limits.scan.maxEvidence * maximumValidationPasses);
       const validationManagedEntries = new CounterBudget(
         "Apply candidate validation managed-tree entries",
-        Math.min(limits.scan.maxFiles, 4096)
+        Math.min(limits.scan.maxFiles, 4096) * maximumValidationPasses
       );
-      const validationResources = {
-        maxFileBytes: dependencyReads.maxFileBytes,
-        files: dependencyReads.files,
-        bytes: dependencyReads.aggregate,
-        deadline: dependencyReads.deadline,
-        analysisBytes: validationAnalysisBytes,
-        work: validationWork,
-        managedEntries: validationManagedEntries,
-        accountedFiles: dependencyReads.accountedFiles
-      };
       const verifyManifestAndSource = async () => {
+        validationPasses.consume();
+        validationDeadline.check();
+        const dependencyReads = projectFileReadBudget(
+          "Apply dependency file reads",
+          readFileBytes,
+          readAggregateBytes,
+          limits.scan.maxFiles,
+          limits.scan.deadlineMs
+        );
+        dependencyReads.aggregate.consume(validationOverlayBytes);
+        const exactSourceReads = changeset.sourcePaths ? createExactSourceReadBudget(limits) : void 0;
+        const scopedSourceReads = changeset.sourcePaths ? void 0 : createScopeOperationBudget(options);
+        const validationResources = {
+          maxFileBytes: dependencyReads.maxFileBytes,
+          files: dependencyReads.files,
+          bytes: dependencyReads.aggregate,
+          deadline: { check: () => {
+            dependencyReads.deadline.check();
+            validationDeadline.check();
+          } },
+          analysisBytes: validationAnalysisBytes,
+          work: validationWork,
+          managedEntries: validationManagedEntries,
+          accountedFiles: dependencyReads.accountedFiles
+        };
         await lease.assertOwned();
         if (await manifestFingerprint(changeset.root, dependencyReads) !== changeset.manifestHash) {
           throw new Error("Project design manifest is stale");
@@ -36613,6 +36626,7 @@ function createTransactionService(options = {}, sharedApprovalAuthority) {
             throw new Error("Candidate pack validation dependency is stale");
           }
         }
+        validationDeadline.check();
       };
       await verifyManifestAndSource();
       await storeRecoverySnapshot(loaded.cache, changeset, now(), {
